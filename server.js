@@ -15,6 +15,8 @@ const MERCHANT_KEY = "b3ac0315-843a-4560-9e49-118b67de175c";
 const MERCHANT_ID = "M22PU06UWBZNO";
 const MERCHANT_BASE_URL = "https://api.phonepe.com/apis/hermes/pg/v1/pay";
 const MERCHANT_STATUS_URL = "https://api.phonepe.com/apis/hermes/pg/v1/status";
+const redirectUrl = "https://uwcindia.in/payment-success";
+const callbackUrl = "https://yourbackend.com/payment-status";
 
 const successUrl = "https://uwcindia.in/payment-success";
 const failureUrl = "https://uwcindia.in/payment-failure"; // Redirect URL for failed payments
