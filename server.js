@@ -1,4 +1,3 @@
-require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
 const crypto = require("crypto");
@@ -16,21 +15,19 @@ app.use(
   })
 );
 
-// ✅ Production Credentials (Use environment variables)
-const MERCHANT_KEY =
-  process.env.MERCHANT_KEY || "b3ac0315-843a-4560-9e49-118b67de175c";
-const MERCHANT_ID = process.env.MERCHANT_ID || "M22PU06UWBZNO";
+// ✅ Hardcoded Production Credentials
+const MERCHANT_KEY = "b3ac0315-843a-4560-9e49-118b67de175c"; // Replace with your actual merchant key
+const MERCHANT_ID = "M22PU06UWBZNO"; // Replace with your actual merchant ID
 const MERCHANT_BASE_URL = "https://api.phonepe.com/apis/hermes/pg/v1/pay";
 const MERCHANT_STATUS_URL = "https://api.phonepe.com/apis/hermes/pg/v1/status";
 const redirectUrl = "https://backend-uwc.onrender.com/payment-success"; // Replace with your production backend URL
 const frontendSuccessUrl = "https://uwcindia.in/payment-success"; // Replace with your production frontend URL
 const frontendFailureUrl = "https://uwcindia.in/payment-failed"; // Replace with your production frontend failure URL
 
-// Supabase client (Use environment variables)
+// Supabase client (Hardcoded credentials)
 const supabase = createClient(
-  process.env.SUPABASE_URL || "https://pvtuhceijltezxhqibrv.supabase.co",
-  process.env.SUPABASE_ANON_KEY ||
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB2dHVoY2Vpamx0ZXp4aHFpYnJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzk0Njk1MzMsImV4cCI6MjA1NTA0NTUzM30.kw49U2pX09mV9AjqqPMbipv2Dv6aSttqCXHhJQlmisY"
+  "https://pvtuhceijltezxhqibrv.supabase.co", // Replace with your Supabase URL
+  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB2dHVoY2Vpamx0ZXp4aHFpYnJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzk0Njk1MzMsImV4cCI6MjA1NTA0NTUzM30.kw49U2pX09mV9AjqqPMbipv2Dv6aSttqCXHhJQlmisY" // Replace with your Supabase Anon Key
 );
 
 // Create a new payment order
@@ -82,9 +79,7 @@ app.post("/create-order", async (req, res) => {
     };
 
     // Generate checksum for PhonePe API
-    const payload = Buffer.from(JSON.stringify(paymentPayload)).toString(
-      "base64"
-    );
+    const payload = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
     const keyIndex = 1;
     const string = payload + "/pg/v1/pay" + MERCHANT_KEY;
     const sha256 = crypto.createHash("sha256").update(string).digest("hex");
@@ -107,10 +102,7 @@ app.post("/create-order", async (req, res) => {
     const response = await axios.request(options);
 
     if (response.data.success && response.data.data.instrumentResponse) {
-      console.log(
-        "✅ Payment URL:",
-        response.data.data.instrumentResponse.redirectInfo.url
-      );
+      console.log("✅ Payment URL:", response.data.data.instrumentResponse.redirectInfo.url);
       return res.status(200).json({
         msg: "OK",
         url: response.data.data.instrumentResponse.redirectInfo.url,
@@ -120,10 +112,7 @@ app.post("/create-order", async (req, res) => {
       return res.status(500).json({ error: "Failed to initiate payment" });
     }
   } catch (error) {
-    console.error(
-      "❌ Error in payment:",
-      error.response?.data || error.message
-    );
+    console.error("❌ Error in payment:", error.response?.data || error.message);
     res.status(500).json({ error: "Internal Server Error" });
   }
 });
@@ -164,9 +153,13 @@ app.get("/payment-success", async (req, res) => {
     res.redirect(
       `${frontendSuccessUrl}?orderId=${orderId}&name=${encodeURIComponent(
         order.name
-      )}&phone=${encodeURIComponent(order.phone)}&address=${encodeURIComponent(
+      )}&phone=${encodeURIComponent(
+        order.phone
+      )}&address=${encodeURIComponent(
         order.address
-      )}&service=${encodeURIComponent(order.service)}&amount=${order.amount}`
+      )}&service=${encodeURIComponent(order.service)}&amount=${
+        order.amount
+      }`
     );
   } catch (error) {
     console.error("❌ Error handling payment success:", error);
