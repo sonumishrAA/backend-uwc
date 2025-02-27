@@ -1,9 +1,12 @@
-const express = require("express");
-const axios = require("axios");
-const crypto = require("crypto");
-const cors = require("cors");
-const { v4: uuidv4 } = require("uuid");
-require("dotenv").config();
+import express from "express";
+import axios from "axios";
+import crypto from "crypto";
+import cors from "cors";
+import { v4 as uuidv4 } from "uuid";
+import { createClient } from "@supabase/supabase-js";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const app = express();
 
@@ -18,16 +21,24 @@ app.use(
 // Production Configuration
 const MERCHANT_ID = process.env.MERCHANT_ID || "M22PU06UWBZNO";
 const MERCHANT_KEY = process.env.MERCHANT_KEY || "b3ac0315-843a-4560-9e49-118b67de175c";
-const KEY_INDEX = 1; // Production API Key Index
+const KEY_INDEX = 1;
 
 // Production Endpoints
-const MERCHANT_BASE_URL = process.env.MERCHANT_BASE_URL || "https://api.phonepe.com/apis/hermes/pg/v1/pay";
-const MERCHANT_STATUS_URL = process.env.MERCHANT_STATUS_URL || "https://api.phonepe.com/apis/hermes/pg/v1/status";
+const MERCHANT_BASE_URL =
+  process.env.MERCHANT_BASE_URL || "https://api.phonepe.com/apis/hermes/pg/v1/pay";
+const MERCHANT_STATUS_URL =
+  process.env.MERCHANT_STATUS_URL || "https://api.phonepe.com/apis/hermes/pg/v1/status";
 
 // Redirect URLs (adjust as needed)
 const redirectUrl = process.env.REDIRECT_URL || "https://backend-uwc.onrender.com/payment-success";
 const successUrl = process.env.SUCCESS_URL || "https://uwcindia.in/payment-success";
 const failureUrl = process.env.FAILURE_URL || "https://uwcindia.in/payment-failed";
+
+// Supabase Client Configuration
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
 
 // Utility function to generate PhonePe checksum
 const generateChecksum = (payload, endpoint) => {
@@ -47,10 +58,10 @@ app.post("/create-order", async (req, res) => {
     // Generate a unique order ID (used as merchantTransactionId)
     const orderId = uuidv4();
 
-    // Prepare PhonePe payload
+    // Prepare PhonePe payload with added currency field
     const paymentPayload = {
       merchantId: MERCHANT_ID,
-      merchantUserId: name, // Alternatively, you could use orderId if needed
+      merchantUserId: name, // Alternatively, you could use orderId if preferred
       mobileNumber,
       amount: Number(amount) * 100, // Convert rupees to paise
       currency: "INR",
@@ -63,19 +74,19 @@ app.post("/create-order", async (req, res) => {
     console.log("Payment Payload:", paymentPayload);
 
     // Encode the payload and generate checksum
-    const payloadBase64 = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
-    const checksum = generateChecksum(payloadBase64, "/pg/v1/pay");
+    const payload = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
+    const checksum = generateChecksum(payload, "/pg/v1/pay");
 
-    console.log("Base64 Payload:", payloadBase64);
+    console.log("Base64 Payload:", payload);
     console.log("Checksum:", checksum);
 
     // Make API request to PhonePe
     const response = await axios.post(
       MERCHANT_BASE_URL,
-      { request: payloadBase64 },
+      { request: payload },
       {
         headers: {
-          "accept": "application/json",
+          accept: "application/json",
           "Content-Type": "application/json",
           "X-VERIFY": checksum
         }
@@ -110,7 +121,7 @@ app.get("/payment-success", async (req, res) => {
       `${MERCHANT_STATUS_URL}/${MERCHANT_ID}/${merchantTransactionId}`,
       {
         headers: {
-          "accept": "application/json",
+          accept: "application/json",
           "Content-Type": "application/json",
           "X-VERIFY": checksum,
           "X-MERCHANT-ID": MERCHANT_ID
