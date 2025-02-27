@@ -13,10 +13,12 @@ const app = express();
 
 // Middleware
 app.use(express.json());
-app.use(cors({
-  origin: 'https://uwcindia.in',
-  methods: ['GET', 'POST']
-}));
+app.use(
+  cors({
+    origin: 'https://uwcindia.in',
+    methods: ['GET', 'POST']
+  })
+);
 
 // Supabase Client Configuration
 const supabase = createClient(
@@ -53,7 +55,7 @@ app.post('/create-order', async (req, res) => {
     const orderId = uuidv4();
     const transactionId = `TXN_${Date.now()}`;
 
-    // Save to Supabase
+    // Save to Supabase (removed transaction_id since it doesn't exist in your schema)
     const { error: dbError } = await supabase
       .from('orders')
       .insert({
@@ -63,8 +65,7 @@ app.post('/create-order', async (req, res) => {
         address,
         service,
         amount,
-        status: 'pending',
-        transaction_id: transactionId
+        status: 'pending'
       });
 
     if (dbError) {
@@ -77,7 +78,7 @@ app.post('/create-order', async (req, res) => {
       merchantId: PHONEPE_CONFIG.merchantId,
       merchantTransactionId: transactionId,
       merchantUserId: orderId,
-      amount: Number(amount) * 100,
+      amount: Number(amount) * 100, // Convert amount to paisa
       redirectUrl: `${PHONEPE_CONFIG.redirectUrl}?orderId=${orderId}`,
       redirectMode: 'GET',
       paymentInstrument: { type: 'UPI_QR_CODE' }
@@ -109,16 +110,15 @@ app.post('/create-order', async (req, res) => {
       success: true,
       paymentUrl: response.data.data.instrumentResponse.redirectInfo.url
     });
-
   } catch (error) {
     console.error('Server Error:', {
       message: error.message,
       stack: error.stack,
       response: error.response?.data
     });
-    return res.status(500).json({ 
+    return res.status(500).json({
       error: 'Transaction failed',
-      details: error.response?.data || error.message 
+      details: error.response?.data || error.message
     });
   }
 });
@@ -138,7 +138,6 @@ app.get('/payment-success', async (req, res) => {
 
     // Redirect to frontend
     res.redirect(`${PHONEPE_CONFIG.frontendSuccessUrl}?orderId=${orderId}`);
-    
   } catch (error) {
     console.error('Payment Success Error:', error);
     res.redirect(PHONEPE_CONFIG.frontendFailureUrl);
@@ -157,7 +156,6 @@ app.get('/payment-failed', async (req, res) => {
 
     // Redirect to frontend
     res.redirect(`${PHONEPE_CONFIG.frontendFailureUrl}?orderId=${orderId}`);
-    
   } catch (error) {
     console.error('Payment Failure Error:', error);
     res.redirect(PHONEPE_CONFIG.frontendFailureUrl);
