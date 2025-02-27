@@ -51,8 +51,8 @@ app.post("/create-order", async (req, res) => {
       .single();
 
     if (orderError) {
-      console.error("Error saving order:", orderError);
-      return res.status(500).json({ error: "Failed to save order" });
+      console.error("Error saving order to Supabase:", orderError);
+      return res.status(500).json({ error: "Failed to save order details" });
     }
 
     // Prepare PhonePe payload
@@ -77,14 +77,16 @@ app.post("/create-order", async (req, res) => {
     const checksum = sha256 + "###" + keyIndex;
 
     // Make API request to PhonePe
-    const response = await axios.post(MERCHANT_BASE_URL, {
-      request: payload,
-    }, {
-      headers: {
-        "Content-Type": "application/json",
-        "X-VERIFY": checksum,
-      },
-    });
+    const response = await axios.post(
+      MERCHANT_BASE_URL,
+      { request: payload },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "X-VERIFY": checksum,
+        },
+      }
+    );
 
     if (response.data.success && response.data.data.instrumentResponse) {
       return res.status(200).json({
@@ -93,11 +95,11 @@ app.post("/create-order", async (req, res) => {
       });
     } else {
       console.error("Payment initiation failed:", response.data);
-      return res.status(500).json({ error: "Failed to initiate payment" });
+      return res.status(500).json({ error: "Failed to initiate payment", details: response.data });
     }
   } catch (error) {
-    console.error("Error in payment:", error.response?.data || error.message);
-    res.status(500).json({ error: "Internal Server Error" });
+    console.error("Error in /create-order:", error.response?.data || error.message);
+    res.status(500).json({ error: "Internal Server Error", details: error.message });
   }
 });
 
