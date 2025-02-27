@@ -31,7 +31,9 @@ const PHONEPE_CONFIG = {
   merchantId: process.env.MERCHANT_ID,
   merchantKey: process.env.MERCHANT_KEY,
   baseUrl: 'https://api.phonepe.com/apis/hermes',
+  // This is the backend endpoint for PhonePe to redirect to upon success
   redirectUrl: 'https://backend-uwc.onrender.com/payment-success',
+  // Frontend URLs for user redirection after processing
   frontendSuccessUrl: 'https://uwcindia.in/payment-success',
   frontendFailureUrl: 'https://uwcindia.in/payment-failed'
 };
@@ -51,11 +53,11 @@ app.post('/create-order', async (req, res) => {
       return res.status(400).json({ error: 'All fields are required' });
     }
 
-    // Generate unique IDs
+    // Generate unique IDs for the order and transaction
     const orderId = uuidv4();
     const transactionId = `TXN_${Date.now()}`;
 
-    // Save to Supabase (removed transaction_id since it doesn't exist in your schema)
+    // Save order details to Supabase (ensure your orders table has the following columns)
     const { error: dbError } = await supabase
       .from('orders')
       .insert({
@@ -73,22 +75,29 @@ app.post('/create-order', async (req, res) => {
       return res.status(500).json({ error: 'Database operation failed' });
     }
 
-    // Prepare PhonePe payload
+    // Prepare the payment payload as per PhonePe API requirements
     const paymentPayload = {
       merchantId: PHONEPE_CONFIG.merchantId,
       merchantTransactionId: transactionId,
       merchantUserId: orderId,
-      amount: Number(amount) * 100, // Convert amount to paisa
+      amount: Number(amount) * 100, // Amount in paisa
       redirectUrl: `${PHONEPE_CONFIG.redirectUrl}?orderId=${orderId}`,
       redirectMode: 'GET',
       paymentInstrument: { type: 'UPI_QR_CODE' }
     };
 
-    // Generate API request components
+    // Log the payload for debugging (remove in production)
+    console.log('Payment Payload:', paymentPayload);
+
+    // Convert payload to base64 and generate checksum
     const payloadBase64 = Buffer.from(JSON.stringify(paymentPayload)).toString('base64');
     const checksum = generatePhonePeChecksum(payloadBase64, '/pg/v1/pay');
 
-    // PhonePe API Request
+    // Log base64 payload and checksum for debugging (remove in production)
+    console.log('Base64 Payload:', payloadBase64);
+    console.log('Checksum:', checksum);
+
+    // Make API request to PhonePe
     const response = await axios.post(
       `${PHONEPE_CONFIG.baseUrl}/pg/v1/pay`,
       { request: payloadBase64 },
@@ -101,11 +110,13 @@ app.post('/create-order', async (req, res) => {
       }
     );
 
+    // Check if PhonePe provided a redirect URL
     if (!response.data?.data?.instrumentResponse?.redirectInfo?.url) {
       console.error('PhonePe API Error:', response.data);
       return res.status(500).json({ error: 'Payment gateway error' });
     }
 
+    // Return the redirect URL to the client
     return res.json({
       success: true,
       paymentUrl: response.data.data.instrumentResponse.redirectInfo.url
@@ -128,7 +139,7 @@ app.get('/payment-success', async (req, res) => {
   try {
     const { orderId } = req.query;
     
-    // Update order status
+    // Update order status to success in Supabase
     const { error } = await supabase
       .from('orders')
       .update({ status: 'success' })
@@ -136,7 +147,7 @@ app.get('/payment-success', async (req, res) => {
 
     if (error) throw error;
 
-    // Redirect to frontend
+    // Redirect to frontend success page with orderId as a query parameter
     res.redirect(`${PHONEPE_CONFIG.frontendSuccessUrl}?orderId=${orderId}`);
   } catch (error) {
     console.error('Payment Success Error:', error);
@@ -148,13 +159,13 @@ app.get('/payment-failed', async (req, res) => {
   try {
     const { orderId } = req.query;
     
-    // Update order status
+    // Update order status to failed in Supabase
     await supabase
       .from('orders')
       .update({ status: 'failed' })
       .eq('id', orderId);
 
-    // Redirect to frontend
+    // Redirect to frontend failure page with orderId as a query parameter
     res.redirect(`${PHONEPE_CONFIG.frontendFailureUrl}?orderId=${orderId}`);
   } catch (error) {
     console.error('Payment Failure Error:', error);
