@@ -110,82 +110,8 @@ app.post("/create-order", async (req, res) => {
   }
 });
 
-// Handle successful payment
-app.post("/payment-success", async (req, res) => {
-  try {
-    const { orderId } = req.query;
-
-    if (!orderId) {
-      return res.status(400).json({ error: "Order ID is required" });
-    }
-
-    // Update order status to "success" in Supabase
-    const { data: updatedOrder, error: updateError } = await supabase
-      .from("orders")
-      .update({ status: "success" })
-      .eq("id", orderId)
-      .select()
-      .single();
-
-    if (updateError) {
-      console.error("Error updating order status:", updateError);
-      return res.status(500).json({ error: "Failed to update order status" });
-    }
-
-    // Redirect to the frontend success page with payment details
-    res.redirect(
-      `https://uwcindia.in/payment-success?orderId=${orderId}&name=${encodeURIComponent(
-        updatedOrder.name
-      )}&phone=${encodeURIComponent(
-        updatedOrder.phone
-      )}&address=${encodeURIComponent(
-        updatedOrder.address
-      )}&service=${encodeURIComponent(updatedOrder.service)}&amount=${
-        updatedOrder.amount
-      }`
-    );
-  } catch (error) {
-    console.error("Error handling payment success:", error);
-    res.status(500).json({ error: "Failed to handle payment success" });
-  }
-});
-
-// Handle failed payment
-app.post("/payment-failed", async (req, res) => {
-  try {
-    const { orderId, errorMessage } = req.query;
-
-    if (!orderId) {
-      return res.status(400).json({ error: "Order ID is required" });
-    }
-
-    // Update order status to "failed" in Supabase
-    const { data: updatedOrder, error: updateError } = await supabase
-      .from("orders")
-      .update({ status: "failed" })
-      .eq("id", orderId)
-      .select()
-      .single();
-
-    if (updateError) {
-      console.error("Error updating order status:", updateError);
-      return res.status(500).json({ error: "Failed to update order status" });
-    }
-
-    // Redirect to the frontend failed payment page with error details
-    res.redirect(
-      `https://uwcindia.in/payment-failed?orderId=${orderId}&error=${encodeURIComponent(
-        errorMessage || "Payment failed due to an error"
-      )}`
-    );
-  } catch (error) {
-    console.error("Error handling payment failure:", error);
-    res.status(500).json({ error: "Failed to handle payment failure" });
-  }
-});
-
 // Start server
-const PORT = process.env.PORT || 8000;
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
 });
