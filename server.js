@@ -4,9 +4,14 @@ import crypto from "crypto";
 import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
 import { createClient } from "@supabase/supabase-js";
+import dotenv from "dotenv";
+
+// Load environment variables
+dotenv.config();
 
 const app = express();
 
+// Middleware
 app.use(express.json());
 app.use(cors());
 
@@ -27,11 +32,12 @@ app.post("/create-order", async (req, res) => {
   try {
     const { name, mobileNumber, amount, address, service } = req.body;
 
+    // Validate required fields
     if (!name || !mobileNumber || !amount || !address || !service) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const orderId = uuidv4();
+    const orderId = uuidv4(); // Generate a unique order ID
 
     // Save order to Supabase
     const { data: order, error: orderError } = await supabase
@@ -88,6 +94,7 @@ app.post("/create-order", async (req, res) => {
       }
     );
 
+    // Check if payment initiation was successful
     if (response.data.success && response.data.data.instrumentResponse) {
       return res.status(200).json({
         msg: "OK",
@@ -100,6 +107,80 @@ app.post("/create-order", async (req, res) => {
   } catch (error) {
     console.error("Error in /create-order:", error.response?.data || error.message);
     res.status(500).json({ error: "Internal Server Error", details: error.message });
+  }
+});
+
+// Handle successful payment
+app.post("/payment-success", async (req, res) => {
+  try {
+    const { orderId } = req.query;
+
+    if (!orderId) {
+      return res.status(400).json({ error: "Order ID is required" });
+    }
+
+    // Update order status to "success" in Supabase
+    const { data: updatedOrder, error: updateError } = await supabase
+      .from("orders")
+      .update({ status: "success" })
+      .eq("id", orderId)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.error("Error updating order status:", updateError);
+      return res.status(500).json({ error: "Failed to update order status" });
+    }
+
+    // Redirect to the frontend success page with payment details
+    res.redirect(
+      `https://uwcindia.in/payment-success?orderId=${orderId}&name=${encodeURIComponent(
+        updatedOrder.name
+      )}&phone=${encodeURIComponent(
+        updatedOrder.phone
+      )}&address=${encodeURIComponent(
+        updatedOrder.address
+      )}&service=${encodeURIComponent(updatedOrder.service)}&amount=${
+        updatedOrder.amount
+      }`
+    );
+  } catch (error) {
+    console.error("Error handling payment success:", error);
+    res.status(500).json({ error: "Failed to handle payment success" });
+  }
+});
+
+// Handle failed payment
+app.post("/payment-failed", async (req, res) => {
+  try {
+    const { orderId, errorMessage } = req.query;
+
+    if (!orderId) {
+      return res.status(400).json({ error: "Order ID is required" });
+    }
+
+    // Update order status to "failed" in Supabase
+    const { data: updatedOrder, error: updateError } = await supabase
+      .from("orders")
+      .update({ status: "failed" })
+      .eq("id", orderId)
+      .select()
+      .single();
+
+    if (updateError) {
+      console.error("Error updating order status:", updateError);
+      return res.status(500).json({ error: "Failed to update order status" });
+    }
+
+    // Redirect to the frontend failed payment page with error details
+    res.redirect(
+      `https://uwcindia.in/payment-failed?orderId=${orderId}&error=${encodeURIComponent(
+        errorMessage || "Payment failed due to an error"
+      )}`
+    );
+  } catch (error) {
+    console.error("Error handling payment failure:", error);
+    res.status(500).json({ error: "Failed to handle payment failure" });
   }
 });
 
