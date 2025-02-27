@@ -58,7 +58,7 @@ app.post("/create-order", async (req, res) => {
     // Generate a unique order ID (used as merchantTransactionId)
     const orderId = uuidv4();
 
-    // Prepare PhonePe payload with added currency field
+    // Prepare PhonePe payload with UPI QR code type and added currency field
     const paymentPayload = {
       merchantId: MERCHANT_ID,
       merchantUserId: name, // Alternatively, you could use orderId if preferred
@@ -66,9 +66,9 @@ app.post("/create-order", async (req, res) => {
       amount: Number(amount) * 100, // Convert rupees to paise
       currency: "INR",
       merchantTransactionId: orderId,
-      redirectUrl: `${redirectUrl}?id=${orderId}`, // PhonePe will redirect here after payment
+      redirectUrl: `${redirectUrl}?id=${orderId}`, // PhonePe will redirect here after payment if needed
       redirectMode: "POST",
-      paymentInstrument: { type: "PAY_PAGE" }
+      paymentInstrument: { type: "UPI_QR_CODE" }
     };
 
     console.log("Payment Payload:", paymentPayload);
@@ -94,10 +94,23 @@ app.post("/create-order", async (req, res) => {
     );
 
     if (response.data.success) {
-      return res.status(200).json({
-        msg: "OK",
-        url: response.data.data.instrumentResponse.redirectInfo.url
-      });
+      // If using UPI QR Code, PhonePe should return QR code details in a field (e.g., qrCodeInfo)
+      const instrumentResponse = response.data.data.instrumentResponse;
+      if (instrumentResponse.qrCodeInfo) {
+        return res.status(200).json({
+          msg: "OK",
+          qrCode: instrumentResponse.qrCodeInfo.qrCode, // This may be a Base64-encoded image or URL
+          expiryTime: instrumentResponse.qrCodeInfo.expiryTime
+        });
+      } else if (instrumentResponse.redirectInfo) {
+        // Fallback, if QR code is not provided, return the redirect URL
+        return res.status(200).json({
+          msg: "OK",
+          url: instrumentResponse.redirectInfo.url
+        });
+      } else {
+        throw new Error("No valid payment response received from PhonePe");
+      }
     } else {
       throw new Error(response.data.message || "Failed to initiate payment");
     }
