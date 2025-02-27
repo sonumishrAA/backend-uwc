@@ -31,20 +31,18 @@ const PHONEPE_CONFIG = {
   merchantId: process.env.MERCHANT_ID,
   merchantKey: process.env.MERCHANT_KEY,
   baseUrl: 'https://api.phonepe.com/apis/hermes',
-  // This is the backend endpoint for PhonePe to redirect to upon success
   redirectUrl: 'https://backend-uwc.onrender.com/payment-success',
-  // Frontend URLs for user redirection after processing
   frontendSuccessUrl: 'https://uwcindia.in/payment-success',
   frontendFailureUrl: 'https://uwcindia.in/payment-failed'
 };
 
-// Utility Functions
+// Utility Function to generate PhonePe checksum
 const generatePhonePeChecksum = (payload, endpoint) => {
   const string = payload + endpoint + PHONEPE_CONFIG.merchantKey;
   return crypto.createHash('sha256').update(string).digest('hex') + '###1';
 };
 
-// API Endpoints
+// API Endpoint to create an order
 app.post('/create-order', async (req, res) => {
   try {
     // Validate request body
@@ -53,11 +51,11 @@ app.post('/create-order', async (req, res) => {
       return res.status(400).json({ error: 'All fields are required' });
     }
 
-    // Generate unique IDs for the order and transaction
+    // Generate unique orderId and transactionId (for PhonePe payload only)
     const orderId = uuidv4();
     const transactionId = `TXN_${Date.now()}`;
 
-    // Save order details to Supabase (ensure your orders table has the following columns)
+    // Save order details to Supabase according to your table schema
     const { error: dbError } = await supabase
       .from('orders')
       .insert({
@@ -75,25 +73,23 @@ app.post('/create-order', async (req, res) => {
       return res.status(500).json({ error: 'Database operation failed' });
     }
 
-    // Prepare the payment payload as per PhonePe API requirements
+    // Prepare PhonePe payload
     const paymentPayload = {
       merchantId: PHONEPE_CONFIG.merchantId,
       merchantTransactionId: transactionId,
       merchantUserId: orderId,
-      amount: Number(amount) * 100, // Amount in paisa
+      amount: Number(amount) * 100, // Convert amount to paisa
       redirectUrl: `${PHONEPE_CONFIG.redirectUrl}?orderId=${orderId}`,
       redirectMode: 'GET',
       paymentInstrument: { type: 'UPI_QR_CODE' }
     };
 
-    // Log the payload for debugging (remove in production)
+    // Log payload for debugging
     console.log('Payment Payload:', paymentPayload);
 
-    // Convert payload to base64 and generate checksum
     const payloadBase64 = Buffer.from(JSON.stringify(paymentPayload)).toString('base64');
     const checksum = generatePhonePeChecksum(payloadBase64, '/pg/v1/pay');
 
-    // Log base64 payload and checksum for debugging (remove in production)
     console.log('Base64 Payload:', payloadBase64);
     console.log('Checksum:', checksum);
 
@@ -110,13 +106,11 @@ app.post('/create-order', async (req, res) => {
       }
     );
 
-    // Check if PhonePe provided a redirect URL
     if (!response.data?.data?.instrumentResponse?.redirectInfo?.url) {
       console.error('PhonePe API Error:', response.data);
       return res.status(500).json({ error: 'Payment gateway error' });
     }
 
-    // Return the redirect URL to the client
     return res.json({
       success: true,
       paymentUrl: response.data.data.instrumentResponse.redirectInfo.url
@@ -139,7 +133,7 @@ app.get('/payment-success', async (req, res) => {
   try {
     const { orderId } = req.query;
     
-    // Update order status to success in Supabase
+    // Update order status to "success"
     const { error } = await supabase
       .from('orders')
       .update({ status: 'success' })
@@ -147,7 +141,7 @@ app.get('/payment-success', async (req, res) => {
 
     if (error) throw error;
 
-    // Redirect to frontend success page with orderId as a query parameter
+    // Redirect to frontend success page with orderId
     res.redirect(`${PHONEPE_CONFIG.frontendSuccessUrl}?orderId=${orderId}`);
   } catch (error) {
     console.error('Payment Success Error:', error);
@@ -159,13 +153,13 @@ app.get('/payment-failed', async (req, res) => {
   try {
     const { orderId } = req.query;
     
-    // Update order status to failed in Supabase
+    // Update order status to "failed"
     await supabase
       .from('orders')
       .update({ status: 'failed' })
       .eq('id', orderId);
 
-    // Redirect to frontend failure page with orderId as a query parameter
+    // Redirect to frontend failure page with orderId
     res.redirect(`${PHONEPE_CONFIG.frontendFailureUrl}?orderId=${orderId}`);
   } catch (error) {
     console.error('Payment Failure Error:', error);
