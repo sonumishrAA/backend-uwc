@@ -73,12 +73,13 @@ app.post('/create-order', async (req, res) => {
       return res.status(500).json({ error: 'Database operation failed' });
     }
 
-    // Prepare PhonePe payload
+    // Prepare PhonePe payload, now with currency: 'INR'
     const paymentPayload = {
       merchantId: PHONEPE_CONFIG.merchantId,
       merchantTransactionId: transactionId,
       merchantUserId: orderId,
       amount: Number(amount) * 100, // Convert amount to paisa
+      currency: 'INR',
       redirectUrl: `${PHONEPE_CONFIG.redirectUrl}?orderId=${orderId}`,
       redirectMode: 'GET',
       paymentInstrument: { type: 'UPI_QR_CODE' }
