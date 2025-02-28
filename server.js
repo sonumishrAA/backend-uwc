@@ -9,129 +9,140 @@ import dotenv from "dotenv";
 dotenv.config();
 
 const app = express();
-const port = process.env.PORT || 8000;
-
-// Middleware
-app.use(cors());
 app.use(express.json());
+app.use(cors({
+  origin: ["https://uwcindia.in", "http://localhost:3000"],
+  methods: ["GET", "POST"],
+  credentials: true
+}));
 
-// PhonePe Configuration
-const MERCHANT_ID = process.env.MERCHANT_ID || "M22PU06UWBZNO";
-const MERCHANT_KEY = process.env.MERCHANT_KEY || "b3ac0315-843a-4560-9e49-118b67de175c";
-const KEY_INDEX = 1;
-const MERCHANT_BASE_URL = process.env.MERCHANT_BASE_URL || "https://api.phonepe.com/apis/hermes/pg/v1/pay";
-const MERCHANT_STATUS_URL = process.env.MERCHANT_STATUS_URL || "https://api.phonepe.com/apis/hermes/pg/v1/status";
-const redirectUrl = process.env.REDIRECT_URL || "https://backend-uwc.onrender.com/payment-success";
-const successUrl = process.env.SUCCESS_URL || "https://uwcindia.in/payment-success";
-const failureUrl = process.env.FAILURE_URL || "https://uwcindia.in/payment-failed";
-
-// Supabase Client (if needed)
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
 );
 
-// Checksum Generation
+// PhonePe Configuration
+const MERCHANT_ID = process.env.MERCHANT_ID;
+const MERCHANT_KEY = process.env.MERCHANT_KEY;
+const KEY_INDEX = 1;
+const MERCHANT_BASE_URL = "https://api.phonepe.com/apis/hermes/pg/v1/pay";
+const MERCHANT_STATUS_URL = "https://api.phonepe.com/apis/hermes/pg/v1/status";
+
+// Utility Functions
 const generateChecksum = (payload, endpoint) => {
   const string = payload + endpoint + MERCHANT_KEY;
   return crypto.createHash("sha256").update(string).digest("hex") + "###" + KEY_INDEX;
 };
 
-// Create Order with UPI QR
+// Routes
 app.post("/create-order", async (req, res) => {
   try {
-    const { name, amount, mobileNumber } = req.body;
+    const { name, phone, amount, address, service } = req.body;
     const orderId = uuidv4();
 
+    // Create initial order record
+    const { error: dbError } = await supabase
+      .from('orders')
+      .insert([{
+        order_id: orderId,
+        amount,
+        status: 'pending',
+        customer_name: name,
+        phone,
+        address,
+        service
+      }]);
+
+    if (dbError) throw dbError;
+
+    // PhonePe payload
     const paymentPayload = {
       merchantId: MERCHANT_ID,
-      merchantUserId: name,
-      mobileNumber,
+      merchantTransactionId: orderId,
+      merchantUserId: uuidv4(),
       amount: Number(amount) * 100,
       currency: "INR",
-      merchantTransactionId: orderId,
-      redirectUrl: redirectUrl,
-      paymentInstrument: {
-        type: "UPI_QR" // UPI QR Code Type
-      }
+      redirectUrl: `${process.env.BACKEND_URL}/payment-success`,
+      redirectMode: "POST",
+      mobileNumber: phone,
+      paymentInstrument: { type: "PAY_PAGE" }
     };
 
     const payload = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
     const checksum = generateChecksum(payload, "/pg/v1/pay");
 
-    const response = await axios.post(
-      MERCHANT_BASE_URL,
-      { request: payload },
-      {
-        headers: {
-          "accept": "application/json",
-          "Content-Type": "application/json",
-          "X-VERIFY": checksum
-        }
-      }
-    );
-
-    // Extract QR Code Data
-    const qrData = response.data.data.instrumentResponse.qrData;
+    const response = await axios.post(MERCHANT_BASE_URL, { request: payload }, {
+      headers: { "X-VERIFY": checksum }
+    });
 
     res.json({
       success: true,
-      qrCodeUrl: qrData,
-      transactionId: orderId,
-      phonepeResponse: response.data
+      paymentUrl: response.data.data.instrumentResponse.redirectInfo.url
     });
-
   } catch (error) {
-    console.error("Payment Error:", error.response?.data || error.message);
-    res.status(500).json({
-      success: false,
-      error: error.response?.data?.message || "Payment initiation failed"
-    });
+    console.error("Create order error:", error);
+    res.status(500).json({ error: error.message });
   }
 });
 
-// Payment Status Check
-app.get("/payment-success", async (req, res) => {
+app.post("/payment-success", async (req, res) => {
   try {
-    const { merchantTransactionId } = req.query;
+    const { merchantTransactionId } = req.body;
     
-    const statusPayload = {
-      merchantId: MERCHANT_ID,
-      merchantTransactionId
-    };
-
-    const payload = Buffer.from(JSON.stringify(statusPayload)).toString("base64");
-    const checksum = generateChecksum(payload, `/pg/v1/status/${MERCHANT_ID}/${merchantTransactionId}`);
-
-    const response = await axios.get(
+    // Verify payment status
+    const checksum = generateChecksum("", `/pg/v1/status/${MERCHANT_ID}/${merchantTransactionId}`);
+    const { data } = await axios.get(
       `${MERCHANT_STATUS_URL}/${MERCHANT_ID}/${merchantTransactionId}`,
-      {
-        headers: {
-          "accept": "application/json",
-          "Content-Type": "application/json",
-          "X-VERIFY": checksum,
-          "X-MERCHANT-ID": MERCHANT_ID
-        }
-      }
+      { headers: { "X-VERIFY": checksum } }
     );
 
-    if (response.data.code === "PAYMENT_SUCCESS") {
-      res.redirect(successUrl);
-    } else {
-      res.redirect(failureUrl);
-    }
-    
+    // Update order status
+    const { error } = await supabase
+      .from('orders')
+      .update({
+        status: data.code === "PAYMENT_SUCCESS" ? "paid" : "failed",
+        transaction_id: data.transactionId,
+        payment_method: data.paymentInstrument?.type,
+        updated_at: new Date().toISOString()
+      })
+      .eq('order_id', merchantTransactionId);
+
+    res.redirect(data.code === "PAYMENT_SUCCESS" 
+      ? `${process.env.FRONTEND_URL}/payment-success?id=${merchantTransactionId}`
+      : `${process.env.FRONTEND_URL}/payment-failed?id=${merchantTransactionId}`
+    );
   } catch (error) {
-    console.error("Status Check Error:", error.response?.data || error.message);
-    res.redirect(failureUrl);
+    console.error("Payment callback error:", error);
+    res.redirect(`${process.env.FRONTEND_URL}/payment-failed`);
   }
 });
 
-// Server Start
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-  console.log("PhonePe Config:", {
-    merchantId: MERCHANT_ID,
-    baseUrl: MERCHANT_BASE_URL
-  });
+app.get("/orders", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
 });
+
+app.get("/order/:id", async (req, res) => {
+  try {
+    const { data, error } = await supabase
+      .from('orders')
+      .select('*')
+      .eq('order_id', req.params.id)
+      .single();
+
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+const PORT = process.env.PORT || 8000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
