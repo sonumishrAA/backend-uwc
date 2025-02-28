@@ -100,11 +100,12 @@ app.post("/create-order", async (req, res) => {
 // with the order id as a query parameter.
 app.post("/payment-success", async (req, res) => {
   try {
-    const { merchantTransactionId } = req.body;
+    // Check both body and query for the transaction id
+    const merchantTransactionId = req.body.merchantTransactionId || req.query.id;
     if (!merchantTransactionId) {
       return res.status(400).json({ error: "Transaction ID is required" });
     }
-
+    
     const checksum = generateChecksum("", `/pg/v1/status/${MERCHANT_ID}/${merchantTransactionId}`);
     const response = await axios.get(
       `${MERCHANT_STATUS_URL}/${MERCHANT_ID}/${merchantTransactionId}`,
@@ -122,8 +123,7 @@ app.post("/payment-success", async (req, res) => {
       const paymentData = response.data.data;
       console.log("Payment Success:", paymentData);
 
-      // ✅ Save Payment Data in Supabase.
-      // You can extend this to include additional fields like name, service type, address, email, etc.
+      // Save Payment Data in Supabase.
       const { error } = await supabase.from("payments").insert([
         {
           order_id: merchantTransactionId,
@@ -132,7 +132,6 @@ app.post("/payment-success", async (req, res) => {
           transaction_id: paymentData.transactionId,
           payment_method: paymentData.paymentInstrument.type,
           created_at: new Date().toISOString(),
-          // Add additional fields here if needed.
         },
       ]);
 
@@ -140,7 +139,6 @@ app.post("/payment-success", async (req, res) => {
         console.error("Supabase Error:", error.message);
       }
 
-      // Redirect to GET /payment-success with order_id as query parameter.
       return res.redirect(`/payment-success?order_id=${merchantTransactionId}`);
     } else {
       return res.redirect(failureUrl);
