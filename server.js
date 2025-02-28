@@ -11,7 +11,10 @@ import { fileURLToPath } from "url";
 dotenv.config();
 
 const app = express();
+// Add both JSON and URL-encoded middleware
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+
 app.use(
   cors({
     origin: "https://uwcindia.in",
@@ -24,19 +27,26 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const MERCHANT_ID = process.env.MERCHANT_ID || "M22PU06UWBZNO";
-const MERCHANT_KEY = process.env.MERCHANT_KEY || "b3ac0315-843a-4560-9e49-118b67de175c";
+const MERCHANT_KEY =
+  process.env.MERCHANT_KEY || "b3ac0315-843a-4560-9e49-118b67de175c";
 const KEY_INDEX = 1;
 
-const MERCHANT_BASE_URL = process.env.MERCHANT_BASE_URL || "https://api.phonepe.com/apis/hermes/pg/v1/pay";
-const MERCHANT_STATUS_URL = process.env.MERCHANT_STATUS_URL || "https://api.phonepe.com/apis/hermes/pg/v1/status";
+const MERCHANT_BASE_URL =
+  process.env.MERCHANT_BASE_URL ||
+  "https://api.phonepe.com/apis/hermes/pg/v1/pay";
+const MERCHANT_STATUS_URL =
+  process.env.MERCHANT_STATUS_URL ||
+  "https://api.phonepe.com/apis/hermes/pg/v1/status";
 
 // These URLs are used as references for redirection.
-// With the new approach, after payment, we redirect to GET endpoints that serve static HTML files.
 const successUrl = "https://backend-uwc.onrender.com/payment-success";
 const failureUrl = "https://backend-uwc.onrender.com/payment-failed";
 
 // ✅ Supabase Client Configuration
-const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_ANON_KEY
+);
 
 // ✅ Function to Generate PhonePe Checksum
 const generateChecksum = (payload, endpoint) => {
@@ -66,7 +76,9 @@ app.post("/create-order", async (req, res) => {
       paymentInstrument: { type: "PAY_PAGE" },
     };
 
-    const payload = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
+    const payload = Buffer.from(JSON.stringify(paymentPayload)).toString(
+      "base64"
+    );
     const checksum = generateChecksum(payload, "/pg/v1/pay");
 
     const response = await axios.post(
@@ -96,23 +108,27 @@ app.post("/create-order", async (req, res) => {
 });
 
 // ✅ POST Route: Handle Payment Success (called by PhonePe)
-// This endpoint verifies the payment, saves details, and then redirects to a GET endpoint
-// with the order id as a query parameter.
 app.post("/payment-success", async (req, res) => {
   try {
     // Log incoming request for debugging
-    console.log("Payment Success Request Body:", req.body);
-    console.log("Payment Success Request Query:", req.query);
+    console.log("Request body:", req.body);
+    console.log("Request query:", req.query);
 
-    // Try to extract transaction ID from body or query parameters
+    // Extract transaction ID from body or query parameters
     const merchantTransactionId =
-      req.body.merchantTransactionId || req.body.id || req.query.id || req.query.merchantTransactionId;
+      req.body.merchantTransactionId ||
+      req.body.id ||
+      req.query.id ||
+      req.query.merchantTransactionId;
     
     if (!merchantTransactionId) {
       return res.status(400).json({ error: "Transaction ID is required" });
     }
 
-    const checksum = generateChecksum("", `/pg/v1/status/${MERCHANT_ID}/${merchantTransactionId}`);
+    const checksum = generateChecksum(
+      "",
+      `/pg/v1/status/${MERCHANT_ID}/${merchantTransactionId}`
+    );
     const response = await axios.get(
       `${MERCHANT_STATUS_URL}/${MERCHANT_ID}/${merchantTransactionId}`,
       {
@@ -129,7 +145,6 @@ app.post("/payment-success", async (req, res) => {
       const paymentData = response.data.data;
       console.log("Payment Success:", paymentData);
 
-      // Save Payment Data in Supabase.
       const { error } = await supabase.from("payments").insert([
         {
           order_id: merchantTransactionId,
@@ -145,7 +160,6 @@ app.post("/payment-success", async (req, res) => {
         console.error("Supabase Error:", error.message);
       }
 
-      // Redirect to GET /payment-success with order_id as query parameter.
       return res.redirect(`/payment-success?order_id=${merchantTransactionId}`);
     } else {
       return res.redirect(failureUrl);
@@ -157,7 +171,6 @@ app.post("/payment-success", async (req, res) => {
 });
 
 // ✅ GET Route: Serve Payment Success Page
-// This serves the payment-success.html file, which will use client-side JS to fetch booking details.
 app.get("/payment-success", (req, res) => {
   res.sendFile(path.join(__dirname, "payment-success.html"));
 });
