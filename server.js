@@ -32,8 +32,8 @@ const MERCHANT_STATUS_URL = process.env.MERCHANT_STATUS_URL || "https://api.phon
 
 // These URLs are used as references for redirection.
 // With the new approach, after payment, we redirect to GET endpoints that serve static HTML files.
-const successUrl = "https://uwcindia.in/payment-success";
-const failureUrl = "https://uwcindia.in/payment-failed";
+const successUrl = "https://backend-uwc.onrender.com/payment-success";
+const failureUrl = "https://backend-uwc.onrender.com/payment-failed";
 
 // ✅ Supabase Client Configuration
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
