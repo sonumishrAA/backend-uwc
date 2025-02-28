@@ -100,12 +100,18 @@ app.post("/create-order", async (req, res) => {
 // with the order id as a query parameter.
 app.post("/payment-success", async (req, res) => {
   try {
-    // Check both body and query for the transaction id
-    const merchantTransactionId = req.body.merchantTransactionId || req.query.id;
+    // Log incoming request for debugging
+    console.log("Payment Success Request Body:", req.body);
+    console.log("Payment Success Request Query:", req.query);
+
+    // Try to extract transaction ID from body or query parameters
+    const merchantTransactionId =
+      req.body.merchantTransactionId || req.body.id || req.query.id || req.query.merchantTransactionId;
+    
     if (!merchantTransactionId) {
       return res.status(400).json({ error: "Transaction ID is required" });
     }
-    
+
     const checksum = generateChecksum("", `/pg/v1/status/${MERCHANT_ID}/${merchantTransactionId}`);
     const response = await axios.get(
       `${MERCHANT_STATUS_URL}/${MERCHANT_ID}/${merchantTransactionId}`,
@@ -139,6 +145,7 @@ app.post("/payment-success", async (req, res) => {
         console.error("Supabase Error:", error.message);
       }
 
+      // Redirect to GET /payment-success with order_id as query parameter.
       return res.redirect(`/payment-success?order_id=${merchantTransactionId}`);
     } else {
       return res.redirect(failureUrl);
