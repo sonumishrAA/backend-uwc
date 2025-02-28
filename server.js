@@ -15,18 +15,22 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 
-// Middleware
+// Middleware Setup
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, "public")));
-app.use(cors({ origin: "https://uwcindia.in", methods: ["GET", "POST"] }));
+app.use(cors({
+  origin: "https://uwcindia.in",
+  methods: ["GET", "POST"],
+  credentials: true
+}));
 
 // PhonePe Constants
-const MERCHANT_ID = process.env.MERCHANT_ID || "M22PU06UWBZNO";
-const MERCHANT_KEY = process.env.MERCHANT_KEY || "b3ac0315-843a-4560-9e49-118b67de175c";
+const MERCHANT_ID = process.env.MERCHANT_ID;
+const MERCHANT_KEY = process.env.MERCHANT_KEY;
 const KEY_INDEX = 1;
-const MERCHANT_BASE_URL = "https://api.phonepe.com/apis/hermes/pg/v1/pay";
-const MERCHANT_STATUS_URL = "https://api.phonepe.com/apis/hermes/pg/v1/status";
+const PHONEPE_BASE_URL = "https://api.phonepe.com/apis/hermes/pg/v1/pay";
+const PHONEPE_STATUS_URL = "https://api.phonepe.com/apis/hermes/pg/v1/status";
 
 // Supabase Client
 const supabase = createClient(
@@ -34,41 +38,68 @@ const supabase = createClient(
   process.env.SUPABASE_ANON_KEY
 );
 
-// Helper Functions
+// Helper: Generate SHA256 Checksum
 const generateChecksum = (payload, endpoint) => {
-  const string = payload + endpoint + MERCHANT_KEY;
-  return crypto.createHash("sha256").update(string).digest("hex") + "###" + KEY_INDEX;
+  const hash = crypto.createHash("sha256");
+  hash.update(payload + endpoint + MERCHANT_KEY);
+  return hash.digest("hex") + "###" + KEY_INDEX;
 };
 
-// Routes
-app.post("/create-order", async (req, res) => {
+// 1. Create Payment Order
+app.post("/api/create-order", async (req, res) => {
   try {
-    const { name, mobileNumber, amount } = req.body;
-    if (!name || !mobileNumber || !amount) {
+    const { amount, name, email, phone } = req.body;
+    
+    // Validation
+    if(!amount || !name || !email || !phone) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const transactionId = uuidv4();
-    const paymentPayload = {
+    // Generate Transaction ID
+    const transactionId = `TXN_${uuidv4()}`;
+    
+    // Payment Payload
+    const paymentData = {
       merchantId: MERCHANT_ID,
-      merchantUserId: name,
-      mobileNumber,
-      amount: Number(amount) * 100,
-      currency: "INR",
       merchantTransactionId: transactionId,
-      redirectUrl: "https://backend-uwc.onrender.com/payment-success",
+      merchantUserId: email,
+      amount: Math.round(Number(amount) * 100), // Convert to paise
+      currency: "INR",
+      redirectUrl: "https://backend-uwc.onrender.com/payment/callback",
       redirectMode: "POST",
-      paymentInstrument: { type: "PAY_PAGE" },
+      callbackUrl: "https://backend-uwc.onrender.com/payment/callback",
+      mobileNumber: phone,
+      paymentInstrument: { type: "PAY_PAGE" }
     };
 
-    const payloadBase64 = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
+    // Base64 Encode
+    const payloadBase64 = Buffer.from(JSON.stringify(paymentData)).toString("base64");
+    
+    // Generate Checksum
     const checksum = generateChecksum(payloadBase64, "/pg/v1/pay");
 
-    const response = await axios.post(MERCHANT_BASE_URL, { request: payloadBase64 }, {
-      headers: {
-        "Content-Type": "application/json",
-        "X-VERIFY": checksum,
+    // PhonePe API Call
+    const response = await axios.post(PHONEPE_BASE_URL, 
+      { request: payloadBase64 },
+      {
+        headers: {
+          "Content-Type": "application/json",
+          "X-VERIFY": checksum,
+        }
       }
+    );
+
+    // Validate Response
+    if(!response.data?.data?.instrumentResponse?.redirectInfo?.url) {
+      throw new Error("Invalid response from PhonePe API");
+    }
+
+    // Save Initial Transaction
+    await supabase.from("transactions").insert({
+      transaction_id: transactionId,
+      amount: amount,
+      status: "INITIATED",
+      user_email: email
     });
 
     res.json({
@@ -77,16 +108,20 @@ app.post("/create-order", async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Create Order Error:", error);
-    res.status(500).json({ error: "Payment initiation failed" });
+    console.error("Order Creation Error:", error);
+    res.status(500).json({ 
+      success: false,
+      error: error.message || "Payment initiation failed"
+    });
   }
 });
 
-app.post("/payment-success", async (req, res) => {
+// 2. Payment Callback Handler
+app.post("/payment/callback", async (req, res) => {
   try {
-    // Decode PhonePe's response
+    // Decode PhonePe Response
     const base64Response = req.body.response;
-    if (!base64Response) throw new Error("No response data");
+    if (!base64Response) throw new Error("Empty callback received");
     
     const decodedResponse = JSON.parse(
       Buffer.from(base64Response, "base64").toString("utf-8")
@@ -95,64 +130,72 @@ app.post("/payment-success", async (req, res) => {
     const transactionId = decodedResponse.data.merchantTransactionId;
     if (!transactionId) throw new Error("Transaction ID missing");
 
-    // Verify payment status
+    // Verify Payment Status
     const checksum = generateChecksum("", `/pg/v1/status/${MERCHANT_ID}/${transactionId}`);
     const statusResponse = await axios.get(
-      `${MERCHANT_STATUS_URL}/${MERCHANT_ID}/${transactionId}`,
-      { headers: { "X-VERIFY": checksum, "X-MERCHANT-ID": MERCHANT_ID } }
+      `${PHONEPE_STATUS_URL}/${MERCHANT_ID}/${transactionId}`,
+      {
+        headers: {
+          "X-VERIFY": checksum,
+          "X-MERCHANT-ID": MERCHANT_ID
+        }
+      }
     );
 
+    // Update Database
     if (statusResponse.data.success) {
-      // Save to database
-      const paymentData = statusResponse.data.data;
-      const { error } = await supabase.from("payments").insert([{
-        order_id: transactionId,
-        amount: paymentData.amount / 100,
-        status: paymentData.state,
-        transaction_id: paymentData.transactionId,
-        payment_method: paymentData.paymentInstrument.type,
-        created_at: new Date().toISOString(),
-      }]);
+      const payment = statusResponse.data.data;
+      
+      await supabase.from("transactions").update({
+        status: payment.state,
+        payment_method: payment.paymentInstrument.type,
+        transaction_time: new Date().toISOString()
+      }).eq("transaction_id", transactionId);
 
-      if (error) throw error;
-
-      // Redirect to success page
-      res.redirect(`/payment-success.html?transaction_id=${transactionId}`);
+      // Redirect to Success Page
+      res.redirect(`/payment/success?transaction_id=${transactionId}`);
     } else {
-      res.redirect("/payment-failed.html");
+      await supabase.from("transactions").update({
+        status: "FAILED"
+      }).eq("transaction_id", transactionId);
+      
+      res.redirect("/payment/failed");
     }
 
   } catch (error) {
-    console.error("Payment Callback Error:", error);
-    res.redirect("/payment-failed.html");
+    console.error("Callback Error:", error);
+    res.redirect("/payment/failed");
   }
 });
 
-// Support Routes
-app.get("/order/:id", async (req, res) => {
+// 3. Get Transaction Details
+app.get("/api/transaction/:id", async (req, res) => {
   try {
     const { data, error } = await supabase
-      .from("payments")
+      .from("transactions")
       .select("*")
-      .eq("order_id", req.params.id)
+      .eq("transaction_id", req.params.id)
       .single();
 
-    if (error || !data) throw new Error("Order not found");
+    if (error || !data) throw new Error("Transaction not found");
     res.json(data);
   } catch (error) {
     res.status(404).json({ error: error.message });
   }
 });
 
-// HTML Pages
-app.get("/payment-success.html", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "payment-success.html"));
+// 4. Serve Static Pages
+app.get("/payment/success", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "success.html"));
 });
 
-app.get("/payment-failed.html", (req, res) => {
-  res.sendFile(path.join(__dirname, "public", "payment-failed.html"));
+app.get("/payment/failed", (req, res) => {
+  res.sendFile(path.join(__dirname, "public", "failed.html"));
 });
 
-// Server Start
+// Start Server
 const PORT = process.env.PORT || 8000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+  console.log(`PhonePe Integration Ready | Merchant ID: ${MERCHANT_ID}`);
+});
