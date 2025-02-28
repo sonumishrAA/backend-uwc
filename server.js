@@ -10,139 +10,156 @@ dotenv.config();
 
 const app = express();
 app.use(express.json());
-app.use(cors({
-  origin: ["https://uwcindia.in", "http://localhost:3000"],
-  methods: ["GET", "POST"],
-  credentials: true
-}));
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
+app.use(
+  cors({
+    origin: "https://uwcindia.in",
+    methods: ["GET", "POST"],
+  })
 );
 
-// PhonePe Configuration
-const MERCHANT_ID = process.env.MERCHANT_ID;
-const MERCHANT_KEY = process.env.MERCHANT_KEY;
+const MERCHANT_ID = process.env.MERCHANT_ID || "M22PU06UWBZNO";
+const MERCHANT_KEY = process.env.MERCHANT_KEY || "b3ac0315-843a-4560-9e49-118b67de175c";
 const KEY_INDEX = 1;
-const MERCHANT_BASE_URL = "https://api.phonepe.com/apis/hermes/pg/v1/pay";
-const MERCHANT_STATUS_URL = "https://api.phonepe.com/apis/hermes/pg/v1/status";
 
-// Utility Functions
+const MERCHANT_BASE_URL = process.env.MERCHANT_BASE_URL || "https://api.phonepe.com/apis/hermes/pg/v1/pay";
+const MERCHANT_STATUS_URL = process.env.MERCHANT_STATUS_URL || "https://api.phonepe.com/apis/hermes/pg/v1/status";
+
+const successUrl = "https://uwcindia.in/payment-success";
+const failureUrl = "https://uwcindia.in/payment-failed";
+
+// ✅ Supabase Client Configuration
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
+
+// ✅ Function to Generate PhonePe Checksum
 const generateChecksum = (payload, endpoint) => {
   const string = payload + endpoint + MERCHANT_KEY;
-  return crypto.createHash("sha256").update(string).digest("hex") + "###" + KEY_INDEX;
+  const sha256 = crypto.createHash("sha256").update(string).digest("hex");
+  return sha256 + "###" + KEY_INDEX;
 };
 
-// Routes
+// ✅ Route: Create Order & Initiate Payment
 app.post("/create-order", async (req, res) => {
   try {
-    const { name, phone, amount, address, service } = req.body;
+    const { name, mobileNumber, amount } = req.body;
+    if (!name || !mobileNumber || !amount) {
+      return res.status(400).json({ error: "Missing required fields" });
+    }
+
     const orderId = uuidv4();
-
-    // Create initial order record
-    const { error: dbError } = await supabase
-      .from('orders')
-      .insert([{
-        order_id: orderId,
-        amount,
-        status: 'pending',
-        customer_name: name,
-        phone,
-        address,
-        service
-      }]);
-
-    if (dbError) throw dbError;
-
-    // PhonePe payload
     const paymentPayload = {
       merchantId: MERCHANT_ID,
-      merchantTransactionId: orderId,
-      merchantUserId: uuidv4(),
+      merchantUserId: name,
+      mobileNumber,
       amount: Number(amount) * 100,
       currency: "INR",
-      redirectUrl: `${process.env.BACKEND_URL}/payment-success`,
+      merchantTransactionId: orderId,
+      redirectUrl: successUrl,
       redirectMode: "POST",
-      mobileNumber: phone,
-      paymentInstrument: { type: "PAY_PAGE" }
+      paymentInstrument: { type: "PAY_PAGE" },
     };
 
     const payload = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
     const checksum = generateChecksum(payload, "/pg/v1/pay");
 
-    const response = await axios.post(MERCHANT_BASE_URL, { request: payload }, {
-      headers: { "X-VERIFY": checksum }
-    });
+    const response = await axios.post(
+      MERCHANT_BASE_URL,
+      { request: payload },
+      {
+        headers: {
+          accept: "application/json",
+          "Content-Type": "application/json",
+          "X-VERIFY": checksum,
+        },
+      }
+    );
 
-    res.json({
-      success: true,
-      paymentUrl: response.data.data.instrumentResponse.redirectInfo.url
-    });
+    if (response.data.success) {
+      return res.status(200).json({
+        msg: "OK",
+        url: response.data.data.instrumentResponse.redirectInfo.url,
+      });
+    } else {
+      throw new Error(response.data.message || "Failed to initiate payment");
+    }
   } catch (error) {
-    console.error("Create order error:", error);
-    res.status(500).json({ error: error.message });
+    console.error("Error in payment initiation:", error.message);
+    res.status(500).json({ error: error.message || "Internal Server Error" });
   }
 });
 
+// ✅ FIXED: Handle Payment Success (POST method for PhonePe)
 app.post("/payment-success", async (req, res) => {
   try {
     const { merchantTransactionId } = req.body;
-    
-    // Verify payment status
+    if (!merchantTransactionId) {
+      return res.status(400).json({ error: "Transaction ID is required" });
+    }
+
     const checksum = generateChecksum("", `/pg/v1/status/${MERCHANT_ID}/${merchantTransactionId}`);
-    const { data } = await axios.get(
+    const response = await axios.get(
       `${MERCHANT_STATUS_URL}/${MERCHANT_ID}/${merchantTransactionId}`,
-      { headers: { "X-VERIFY": checksum } }
+      {
+        headers: {
+          accept: "application/json",
+          "Content-Type": "application/json",
+          "X-VERIFY": checksum,
+          "X-MERCHANT-ID": MERCHANT_ID,
+        },
+      }
     );
 
-    // Update order status
-    const { error } = await supabase
-      .from('orders')
-      .update({
-        status: data.code === "PAYMENT_SUCCESS" ? "paid" : "failed",
-        transaction_id: data.transactionId,
-        payment_method: data.paymentInstrument?.type,
-        updated_at: new Date().toISOString()
-      })
-      .eq('order_id', merchantTransactionId);
+    if (response.data.success) {
+      const paymentData = response.data.data;
+      console.log("Payment Success:", paymentData);
 
-    res.redirect(data.code === "PAYMENT_SUCCESS" 
-      ? `${process.env.FRONTEND_URL}/payment-success?id=${merchantTransactionId}`
-      : `${process.env.FRONTEND_URL}/payment-failed?id=${merchantTransactionId}`
-    );
+      // ✅ Save Payment Data in Supabase
+      const { error } = await supabase.from("payments").insert([
+        {
+          order_id: merchantTransactionId,
+          amount: paymentData.amount / 100,
+          status: paymentData.state,
+          transaction_id: paymentData.transactionId,
+          payment_method: paymentData.paymentInstrument.type,
+          created_at: new Date().toISOString(),
+        },
+      ]);
+
+      if (error) {
+        console.error("Supabase Error:", error.message);
+      }
+
+      return res.redirect(successUrl);
+    } else {
+      return res.redirect(failureUrl);
+    }
   } catch (error) {
-    console.error("Payment callback error:", error);
-    res.redirect(`${process.env.FRONTEND_URL}/payment-failed`);
+    console.error("Error fetching payment status:", error.message);
+    res.status(500).json({ error: error.message || "Internal Server Error" });
   }
 });
 
-app.get("/orders", async (req, res) => {
-  try {
-    const { data, error } = await supabase
-      .from('orders')
-      .select('*')
-      .order('created_at', { ascending: false });
-
-    res.json(data);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
+// ✅ Route to Fetch Order Details
 app.get("/order/:id", async (req, res) => {
   try {
+    const { id } = req.params;
+
     const { data, error } = await supabase
-      .from('orders')
-      .select('*')
-      .eq('order_id', req.params.id)
+      .from("payments")
+      .select("*")
+      .eq("order_id", id)
       .single();
+
+    if (error || !data) {
+      return res.status(404).json({ error: "Order not found" });
+    }
 
     res.json(data);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    console.error("Error fetching order details:", error.message);
+    res.status(500).json({ error: "Internal Server Error" });
   }
 });
 
-const PORT = process.env.PORT || 8000;
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+app.listen(8000, () => {
+  console.log("Server is running on port 8000");
+});
