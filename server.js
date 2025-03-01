@@ -156,16 +156,25 @@ app.post("/payment-success", async (req, res) => {
     if (response.data.success) {
       const paymentData = response.data.data;
       console.log("Payment Success:", paymentData);
-
-      const { error } = await supabase
-        .from("orders")
-        .update({
+ const email =
+        req.body.email || req.query.email || req.body.customerEmail || "";
+      const service_type =
+        req.body.service_type || req.query.service_type || "";
+     const { error } = await supabase.from("orders").insert([
+        {
+          order_id: merchantTransactionId,
+          amount: paymentData.amount / 100,
           status: paymentData.state,
           transaction_id: paymentData.transactionId,
           payment_method: paymentData.paymentInstrument.type,
-        })
-        .eq("order_id", merchantTransactionId);
-
+          created_at: new Date().toISOString(),
+          name: req.body.name || req.query.name || "",
+          email: email,
+          address: req.body.address || req.query.address || "",
+          phone_no: req.body.mobileNumber || req.query.mobileNumber || "",
+          service_type: service_type,
+        },
+      ]);
       if (error) {
         console.error("Supabase Error:", error.message);
       }
