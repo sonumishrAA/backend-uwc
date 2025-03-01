@@ -122,8 +122,8 @@ app.post("/create-order", async (req, res) => {
 // ✅ POST Route: Handle Payment Success
 app.post("/payment-success", async (req, res) => {
   try {
-    console.log("Request body:", req.body);
-    console.log("Request query:", req.query);
+    console.log("Request Body:", req.body);
+    console.log("Request Query:", req.query);
 
     const merchantTransactionId =
       req.body.merchantTransactionId ||
@@ -137,6 +137,24 @@ app.post("/payment-success", async (req, res) => {
       return res.status(400).json({ error: "Transaction ID is required" });
     }
 
+    // ✅ Check if order already exists in Supabase
+    const { data: existingOrder, error: fetchError } = await supabase
+      .from("orders")
+      .select("order_id")
+      .eq("order_id", merchantTransactionId)
+      .single();
+
+    if (fetchError) {
+      console.error("Supabase Fetch Error:", fetchError.message);
+    }
+
+    // ✅ If order exists, return success without inserting again
+    if (existingOrder) {
+      console.log("Order already exists. Skipping insertion.");
+      return res.redirect(`/payment-success?order_id=${merchantTransactionId}`);
+    }
+
+    // ✅ If order does not exist, proceed with insertion
     const checksum = generateChecksum(
       "",
       `/pg/v1/status/${MERCHANT_ID}/${merchantTransactionId}`
@@ -156,11 +174,13 @@ app.post("/payment-success", async (req, res) => {
     if (response.data.success) {
       const paymentData = response.data.data;
       console.log("Payment Success:", paymentData);
- const email =
+
+      const email =
         req.body.email || req.query.email || req.body.customerEmail || "";
       const service_type =
         req.body.service_type || req.query.service_type || "";
-     const { error } = await supabase.from("orders").insert([
+
+      const { error } = await supabase.from("orders").insert([
         {
           order_id: merchantTransactionId,
           amount: paymentData.amount / 100,
@@ -175,8 +195,9 @@ app.post("/payment-success", async (req, res) => {
           service_type: service_type,
         },
       ]);
+
       if (error) {
-        console.error("Supabase Error:", error.message);
+        console.error("Supabase Insert Error:", error.message);
       }
 
       return res.redirect(`/payment-success?order_id=${merchantTransactionId}`);
