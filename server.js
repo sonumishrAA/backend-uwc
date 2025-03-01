@@ -11,7 +11,6 @@ import { fileURLToPath } from "url";
 dotenv.config();
 
 const app = express();
-// Parse both JSON and URL-encoded bodies
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -22,7 +21,6 @@ app.use(
   })
 );
 
-// For ES Modules, get __dirname:
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
@@ -38,7 +36,6 @@ const MERCHANT_STATUS_URL =
   process.env.MERCHANT_STATUS_URL ||
   "https://api.phonepe.com/apis/hermes/pg/v1/status";
 
-// These URLs are used as references for redirection.
 const successUrl = "https://backend-uwc.onrender.com/payment-success";
 const failureUrl = "https://backend-uwc.onrender.com/payment-failed";
 
@@ -58,7 +55,8 @@ const generateChecksum = (payload, endpoint) => {
 // ✅ Route: Create Order & Initiate Payment
 app.post("/create-order", async (req, res) => {
   try {
-    const { name, mobileNumber, amount } = req.body;
+    const { name, mobileNumber, amount, email, address, service_type } =
+      req.body;
     if (!name || !mobileNumber || !amount) {
       return res.status(400).json({ error: "Missing required fields" });
     }
@@ -68,10 +66,10 @@ app.post("/create-order", async (req, res) => {
       merchantId: MERCHANT_ID,
       merchantUserId: name,
       mobileNumber,
-      amount: Number(amount) * 100, // Amount in paise
+      amount: Number(amount) * 100,
       currency: "INR",
       merchantTransactionId: orderId,
-      redirectUrl: successUrl, // PhonePe will POST here
+      redirectUrl: successUrl,
       redirectMode: "POST",
       paymentInstrument: { type: "PAY_PAGE" },
     };
@@ -94,6 +92,20 @@ app.post("/create-order", async (req, res) => {
     );
 
     if (response.data.success) {
+      await supabase.from("orders").insert([
+        {
+          order_id: orderId,
+          name,
+          email,
+          phone_no: mobileNumber,
+          address,
+          service_type,
+          amount: Number(amount),
+          status: "PENDING",
+          created_at: new Date().toISOString(),
+        },
+      ]);
+
       return res.status(200).json({
         msg: "OK",
         url: response.data.data.instrumentResponse.redirectInfo.url,
@@ -107,14 +119,12 @@ app.post("/create-order", async (req, res) => {
   }
 });
 
-// ✅ POST Route: Handle Payment Success (called by PhonePe)
+// ✅ POST Route: Handle Payment Success
 app.post("/payment-success", async (req, res) => {
   try {
-    // Log incoming request for debugging
     console.log("Request body:", req.body);
     console.log("Request query:", req.query);
 
-    // Expanded extraction: try multiple possible field names
     const merchantTransactionId =
       req.body.merchantTransactionId ||
       req.body.id ||
@@ -122,7 +132,7 @@ app.post("/payment-success", async (req, res) => {
       req.query.id ||
       req.query.merchantTransactionId ||
       req.query.transactionId;
-    
+
     if (!merchantTransactionId) {
       return res.status(400).json({ error: "Transaction ID is required" });
     }
@@ -147,21 +157,14 @@ app.post("/payment-success", async (req, res) => {
       const paymentData = response.data.data;
       console.log("Payment Success:", paymentData);
 
-      const { error } = await supabase.from("payments").insert([
-        {
-          order_id: merchantTransactionId,
-          amount: paymentData.amount / 100,
+      const { error } = await supabase
+        .from("orders")
+        .update({
           status: paymentData.state,
           transaction_id: paymentData.transactionId,
           payment_method: paymentData.paymentInstrument.type,
-          created_at: new Date().toISOString(),
-          name: req.body.name || req.query.name || "", 
-    email: req.body.email || req.query.email || "",
-    address: req.body.address || req.query.address || "",
-    phone_no: req.body.mobileNumber || req.query.mobileNumber || "",
-    service_type: req.body.service_type || req.query.service_type || "",
-        },
-      ]);
+        })
+        .eq("order_id", merchantTransactionId);
 
       if (error) {
         console.error("Supabase Error:", error.message);
@@ -177,23 +180,13 @@ app.post("/payment-success", async (req, res) => {
   }
 });
 
-// ✅ GET Route: Serve Payment Success Page
-app.get("/payment-success", (req, res) => {
-  res.sendFile(path.join(__dirname, "payment-success.html"));
-});
-
-// ✅ GET Route: Serve Payment Failed Page
-app.get("/payment-failed", (req, res) => {
-  res.sendFile(path.join(__dirname, "payment-failed.html"));
-});
-
-// ✅ Route to Fetch Order Details (used by the payment-success.html page's JS)
+// ✅ GET Route: Fetch Order Details
 app.get("/order/:id", async (req, res) => {
   try {
     const { id } = req.params;
 
     const { data, error } = await supabase
-      .from("payments")
+      .from("orders")
       .select("*")
       .eq("order_id", id)
       .single();
