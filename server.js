@@ -155,6 +155,11 @@ app.post("/payment-success", async (req, res) => {
           transaction_id: paymentData.transactionId,
           payment_method: paymentData.paymentInstrument.type,
           created_at: new Date().toISOString(),
+          name: req.body.name || req.query.name || "", 
+    email: req.body.email || req.query.email || "",
+    address: req.body.address || req.query.address || "",
+    phone_no: req.body.mobileNumber || req.query.mobileNumber || "",
+    service_type: req.body.service_type || req.query.service_type || "",
         },
       ]);
 
