@@ -5,6 +5,8 @@ import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 
 dotenv.config();
 
@@ -12,149 +14,147 @@ const app = express();
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// CORS Configuration
+// Enhanced CORS configuration
 app.use(cors({
   origin: "https://uwcindia.in",
   methods: ["GET", "POST"],
-  allowedHeaders: ["Content-Type", "Authorization"]
+  credentials: true
 }));
 
-// PhonePe Configuration
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// PhonePe configuration
 const MERCHANT_ID = process.env.MERCHANT_ID;
 const MERCHANT_KEY = process.env.MERCHANT_KEY;
 const KEY_INDEX = 1;
-const IS_PRODUCTION = process.env.NODE_ENV === "production";
-
-const PHONEPE_BASE_URL = IS_PRODUCTION
+const PHONEPE_BASE_URL = process.env.NODE_ENV === "production" 
   ? "https://api.phonepe.com/apis/hermes"
   : "https://api-preprod.phonepe.com/apis/merchant-simulator";
 
-// Supabase Configuration
+// Frontend URLs
+const FRONTEND_SUCCESS_URL = "https://uwcindia.in/payment-success";
+const FRONTEND_FAILURE_URL = "https://uwcindia.in/payment-failed";
+
+// Supabase client
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
 );
 
-// Helper Functions
+// Helper functions
 const generateChecksum = (payload, endpoint) => {
   const string = payload + endpoint + MERCHANT_KEY;
-  const sha256 = crypto.createHash("sha256").update(string).digest("hex");
-  return `${sha256}###${KEY_INDEX}`;
+  return crypto.createHash("sha256").update(string).digest("hex") + "###" + KEY_INDEX;
 };
 
-const validatePhonePeResponse = (response) => {
-  if (!response?.data?.success) return false;
-  if (!response.data.data?.instrumentResponse?.redirectInfo?.url) return false;
-  return true;
-};
-
-// Routes
+// Create order endpoint
 app.post("/create-order", async (req, res) => {
   try {
-    // Validate Input
     const { name, mobileNumber, amount, email, address, service_type } = req.body;
-    if (!name || !mobileNumber || !amount) {
+
+    // Validation
+    if (!name || !mobileNumber || !amount || !service_type) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    // Create Order ID
     const orderId = uuidv4();
-    
-    // Prepare Payment Payload
+    const amountInPaisa = Math.round(Number(amount) * 100;
+
+    // Create PhonePe payload
     const paymentPayload = {
       merchantId: MERCHANT_ID,
       merchantTransactionId: orderId,
-      merchantUserId: name.substring(0, 36), // PhonePe max length
-      amount: Math.round(Number(amount) * 100), // Convert to paisa
+      merchantUserId: name.substring(0, 36),
+      amount: amountInPaisa,
       currency: "INR",
-      redirectUrl: "https://backend-uwc.onrender.com/payment-success",
+      redirectUrl: `${PHONEPE_BASE_URL}/payment-success`,
       redirectMode: "POST",
-      mobileNumber: mobileNumber.toString().padStart(10, '0').slice(-10),
+      mobileNumber: mobileNumber.toString().slice(-10),
       paymentInstrument: { type: "PAY_PAGE" }
     };
 
-    // Generate Checksum
+    // Generate checksum
     const payloadBase64 = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
     const checksum = generateChecksum(payloadBase64, "/pg/v1/pay");
 
-    // Call PhonePe API
+    // Initiate PhonePe payment
     const response = await axios.post(
       `${PHONEPE_BASE_URL}/pg/v1/pay`,
       { request: payloadBase64 },
       {
         headers: {
           "Content-Type": "application/json",
-          "X-VERIFY": checksum,
+          "X-VERIFY": checksum
         },
         timeout: 10000
       }
     );
 
-    // Validate Response
-    if (!validatePhonePeResponse(response)) {
+    // Validate response
+    if (!response?.data?.data?.instrumentResponse?.redirectInfo?.url) {
       throw new Error("Invalid response from payment gateway");
     }
 
-    // Save to Database
+    // Store order in Supabase
     const { error } = await supabase.from("orders").insert([{
       order_id: orderId,
       name,
-      email: email || null,
+      email,
       phone_no: mobileNumber,
-      address: address || null,
-      service_type: service_type || null,
+      address,
+      service_type,
       amount: Number(amount),
-      status: "INITIATED",
+      status: "PENDING",
       created_at: new Date().toISOString()
     }]);
 
     if (error) throw error;
 
-    // Return Payment URL
+    // Return payment URL
     res.json({
       success: true,
       paymentUrl: response.data.data.instrumentResponse.redirectInfo.url
     });
 
   } catch (error) {
-    console.error("Create Order Error:", {
-      message: error.message,
-      stack: error.stack,
-      response: error.response?.data
-    });
-    
+    console.error("Create Order Error:", error);
     res.status(500).json({
       success: false,
-      error: "Payment initiation failed",
+      error: error.message,
       debugId: uuidv4()
     });
   }
 });
 
+// Payment callback handler
 app.post("/payment-success", async (req, res) => {
   try {
-    // Get Transaction ID
     const transactionId = req.body.transactionId || req.body.merchantTransactionId;
+    
     if (!transactionId) {
-      return res.redirect(`https://uwcindia.in/payment-failed?error=missing_transaction`);
+      return res.redirect(`${FRONTEND_FAILURE_URL}?error=missing_transaction`);
     }
 
-    // Verify Payment Status
-    const checksum = generateChecksum("", `/pg/v1/status/${MERCHANT_ID}/${transactionId}`);
+    // Verify payment status
+    const checksumPayload = `${MERCHANT_ID}/pg/v1/status/${MERCHANT_ID}/${transactionId}`;
+    const checksum = generateChecksum(checksumPayload, "");
+    
     const statusResponse = await axios.get(
       `${PHONEPE_BASE_URL}/pg/v1/status/${MERCHANT_ID}/${transactionId}`,
       {
         headers: {
           "X-VERIFY": checksum,
           "X-MERCHANT-ID": MERCHANT_ID
-        }
+        },
+        timeout: 10000
       }
     );
 
-    // Update Database
     if (statusResponse.data?.success) {
       const paymentData = statusResponse.data.data;
-      
+
+      // Update order status
       const { error } = await supabase
         .from("orders")
         .update({
@@ -167,17 +167,19 @@ app.post("/payment-success", async (req, res) => {
 
       if (error) throw error;
 
-      return res.redirect(`https://uwcindia.in/payment-success?order_id=${transactionId}`);
+      // Redirect to frontend with order ID
+      return res.redirect(`${FRONTEND_SUCCESS_URL}?order_id=${transactionId}`);
     }
 
     throw new Error("Payment verification failed");
 
   } catch (error) {
     console.error("Payment Callback Error:", error);
-    res.redirect(`https://uwcindia.in/payment-failed?error=${encodeURIComponent(error.message)}`);
+    res.redirect(`${FRONTEND_FAILURE_URL}?error=${encodeURIComponent(error.message)}`);
   }
 });
 
+// Get order details
 app.get("/order/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -193,7 +195,7 @@ app.get("/order/:id", async (req, res) => {
       success: true,
       data: {
         ...data,
-        amount: data.amount / 100 // Convert back to INR
+        amount: data.amount / 100  // Convert back to INR
       }
     });
 
