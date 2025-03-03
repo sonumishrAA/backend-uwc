@@ -57,7 +57,7 @@ app.post("/create-order", async (req, res) => {
   try {
     const { name, mobileNumber, amount, email, address, service_type } =
       req.body;
-    if (!name || !mobileNumber || !amount) {
+    if (!name || !mobileNumber || !amount || !service_type) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
@@ -137,7 +137,6 @@ app.post("/payment-success", async (req, res) => {
       return res.status(400).json({ error: "Transaction ID is required" });
     }
 
-    // ✅ Check if order already exists in Supabase
     const { data: existingOrder, error: fetchError } = await supabase
       .from("orders")
       .select("order_id")
@@ -148,13 +147,11 @@ app.post("/payment-success", async (req, res) => {
       console.error("Supabase Fetch Error:", fetchError.message);
     }
 
-    // ✅ If order exists, return success without inserting again
     if (existingOrder) {
       console.log("Order already exists. Skipping insertion.");
       return res.redirect(`/payment-success?order_id=${merchantTransactionId}`);
     }
 
-    // ✅ If order does not exist, proceed with insertion
     const checksum = generateChecksum(
       "",
       `/pg/v1/status/${MERCHANT_ID}/${merchantTransactionId}`
@@ -175,32 +172,17 @@ app.post("/payment-success", async (req, res) => {
       const paymentData = response.data.data;
       console.log("Payment Success:", paymentData);
 
-      const email =
-        req.body.email || req.query.email || req.body.customerEmail || "";
-      const service_type =
-        req.body.service_type || req.query.service_type || "";
-
-      const { error } = await supabase.from("orders").insert([
-        {
-          order_id: merchantTransactionId,
-          amount: paymentData.amount / 100,
-          status: paymentData.state,
-          transaction_id: paymentData.transactionId,
-          payment_method: paymentData.paymentInstrument.type,
-          created_at: new Date().toISOString(),
-          name: req.body.name || req.query.name || "",
-          email: email,
-          address: req.body.address || req.query.address || "",
-          phone_no: req.body.mobileNumber || req.query.mobileNumber || "",
-          service_type: service_type,
-        },
-      ]);
+      const { error } = await supabase.from("orders").update({
+        status: paymentData.state,
+        transaction_id: paymentData.transactionId,
+        payment_method: paymentData.paymentInstrument.type,
+      }).eq("order_id", merchantTransactionId);
 
       if (error) {
-        console.error("Supabase Insert Error:", error.message);
+        console.error("Supabase Update Error:", error.message);
       }
 
-      return res.redirect(`/payment-success?order_id=${merchantTransactionId}`);
+      return res.redirect(`https://backend-uwc.onrender.com/payment-success?order_id=${merchantTransactionId}`);
     } else {
       return res.redirect(failureUrl);
     }
