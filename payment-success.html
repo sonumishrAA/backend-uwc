@@ -1,102 +1,54 @@
 <!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Payment Successful</title>
-    <style>
-      body {
-        background-color: #f5f5f5;
-        font-family: Arial, sans-serif;
-        margin: 0;
-        padding: 20px;
-      }
-      .container {
-        max-width: 600px;
-        margin: 2rem auto;
-        background: #fff;
-        padding: 2rem;
-        border-radius: 8px;
-        box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-        text-align: center;
-      }
-      .details {
-        text-align: left;
-        margin: 1rem 0;
-      }
-      .details div {
-        margin-bottom: 0.5rem;
-      }
-      .details span {
-        font-weight: bold;
-      }
-      .btn {
-        background-color: #007bff;
-        color: #fff;
-        padding: 0.5rem 1rem;
-        border: none;
-        border-radius: 4px;
-        cursor: pointer;
-        margin-top: 1rem;
-      }
-      a {
-        display: inline-block;
-        margin-top: 1.5rem;
-        text-decoration: none;
-        color: #007bff;
-      }
-    </style>
-  </head>
-  <body>
-    <div class="container">
-      <h1>Payment Successful!</h1>
-      <p>Thank you for your payment. Here are your booking details:</p>
-      <div id="bookingDetails" class="details">
-        <div><span>Name:</span> <span id="name">Loading...</span></div>
-        <div>
-          <span>Service Type:</span> <span id="serviceType">Loading...</span>
-        </div>
-        <div><span>Address:</span> <span id="address">Loading...</span></div>
-        <div><span>Email:</span> <span id="email">Loading...</span></div>
-        <div><span>Order ID:</span> <span id="orderId">Loading...</span></div>
-      </div>
-      <button class="btn" onclick="window.print()">Print Receipt</button>
-      <br />
-      <a href="/">Go to Home</a>
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Payment Successful</title>
+  <style>
+    /* Your existing CSS styles */
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Payment Successful!</h1>
+    <p>Thank you for your payment. Here are your booking details:</p>
+    <div id="bookingDetails" class="details">
+      <!-- Details fields same as before -->
     </div>
-    <script>
-      // Function to get a query parameter value by name
-      function getQueryParam(param) {
-        const urlParams = new URLSearchParams(window.location.search);
-        return urlParams.get(param);
-      }
+    <button class="btn" onclick="window.print()">Print Receipt</button>
+    <br>
+    <a href="/">Go to Home</a>
+  </div>
 
-      // Extract order_id from the URL query parameters
-      const orderId = getQueryParam("order_id");
+  <script>
+    // Get order ID from URL query parameters
+    const urlParams = new URLSearchParams(window.location.search);
+    const orderId = urlParams.get('order_id');
 
-      if (orderId) {
-        // Fetch the booking details from the backend
-        fetch(`/order/${orderId}`)
-          .then((response) => response.json())
-          .then((data) => {
-            // Assuming your data contains fields: name, service_type, address, email
-            document.getElementById("name").innerText = data.name || "N/A";
-            document.getElementById("serviceType").innerText =
-              data.service_type || "N/A";
-            document.getElementById("address").innerText =
-              data.address || "N/A";
-            document.getElementById("email").innerText = data.email || "N/A";
-            document.getElementById("orderId").innerText = orderId;
-          })
-          .catch((error) => {
-            console.error("Error fetching booking details:", error);
-            document.getElementById("bookingDetails").innerHTML =
-              "<p>Error loading booking details.</p>";
-          });
-      } else {
-        document.getElementById("bookingDetails").innerHTML =
-          "<p>No booking details found.</p>";
-      }
-    </script>
-  </body>
+    if (orderId) {
+      fetch(`https://backend-uwc.onrender.com/order/${orderId}`)
+        .then(response => {
+          if (!response.ok) throw new Error('Network response not ok');
+          return response.json();
+        })
+        .then(({ data }) => {
+          document.getElementById("name").textContent = data.name || "N/A";
+          document.getElementById("serviceType").textContent = data.service_type || "N/A";
+          document.getElementById("address").textContent = data.address || "N/A";
+          document.getElementById("email").textContent = data.email || "N/A";
+          document.getElementById("orderId").textContent = orderId;
+        })
+        .catch(error => {
+          console.error("Error:", error);
+          document.getElementById("bookingDetails").innerHTML = `
+            <p>Error loading details: ${error.message}</p>
+          `;
+        });
+    } else {
+      document.getElementById("bookingDetails").innerHTML = `
+        <p>No order ID provided</p>
+      `;
+    }
+  </script>
+</body>
 </html>
