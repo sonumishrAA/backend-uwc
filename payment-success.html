@@ -3,50 +3,63 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Payment Successful</title>
+  <title>Payment Successful - UWC</title>
   <style>
-    /* Your existing CSS styles */
+    /* Add your custom styles here */
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>Payment Successful!</h1>
-    <p>Thank you for your payment. Here are your booking details:</p>
-    <div id="bookingDetails" class="details">
-      <!-- Details fields same as before -->
+    <h1>Payment Successful 🎉</h1>
+    <div id="order-details">
+      <!-- Details will be populated by JavaScript -->
     </div>
-    <button class="btn" onclick="window.print()">Print Receipt</button>
-    <br>
-    <a href="/">Go to Home</a>
   </div>
 
   <script>
-    // Get order ID from URL query parameters
-    const urlParams = new URLSearchParams(window.location.search);
-    const orderId = urlParams.get('order_id');
+    document.addEventListener('DOMContentLoaded', async () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const orderId = urlParams.get('order_id');
+      
+      if (!orderId) {
+        showError('No order ID found in URL');
+        return;
+      }
 
-    if (orderId) {
-      fetch(`https://backend-uwc.onrender.com/order/${orderId}`)
-        .then(response => {
-          if (!response.ok) throw new Error('Network response not ok');
-          return response.json();
-        })
-        .then(({ data }) => {
-          document.getElementById("name").textContent = data.name || "N/A";
-          document.getElementById("serviceType").textContent = data.service_type || "N/A";
-          document.getElementById("address").textContent = data.address || "N/A";
-          document.getElementById("email").textContent = data.email || "N/A";
-          document.getElementById("orderId").textContent = orderId;
-        })
-        .catch(error => {
-          console.error("Error:", error);
-          document.getElementById("bookingDetails").innerHTML = `
-            <p>Error loading details: ${error.message}</p>
-          `;
-        });
-    } else {
-      document.getElementById("bookingDetails").innerHTML = `
-        <p>No order ID provided</p>
+      try {
+        const response = await fetch(`https://backend-uwc.onrender.com/order/${orderId}`);
+        
+        if (!response.ok) {
+          throw new Error(`HTTP error! status: ${response.status}`);
+        }
+
+        const { data } = await response.json();
+        
+        const detailsHtml = `
+          <h3>Order Details</h3>
+          <p><strong>Order ID:</strong> ${orderId}</p>
+          <p><strong>Name:</strong> ${data.name || 'N/A'}</p>
+          <p><strong>Service Type:</strong> ${data.service_type || 'N/A'}</p>
+          <p><strong>Amount:</strong> ₹${data.amount || '0'}</p>
+          <p><strong>Status:</strong> ${data.status || 'Unknown'}</p>
+          <p><strong>Transaction ID:</strong> ${data.transaction_id || 'N/A'}</p>
+        `;
+
+        document.getElementById('order-details').innerHTML = detailsHtml;
+
+      } catch (error) {
+        console.error('Error fetching order details:', error);
+        showError(`Failed to load order details: ${error.message}`);
+      }
+    });
+
+    function showError(message) {
+      document.getElementById('order-details').innerHTML = `
+        <div class="error">
+          <h3>Error Loading Details</h3>
+          <p>${message}</p>
+          <p>Please contact support with your order ID.</p>
+        </div>
       `;
     }
   </script>
