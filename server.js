@@ -36,28 +36,26 @@ const MERCHANT_STATUS_URL =
   process.env.MERCHANT_STATUS_URL ||
   "https://api.phonepe.com/apis/hermes/pg/v1/status";
 
-const successUrl = "https://backend-uwc.onrender.com/payment-success";
-const failureUrl = "https://backend-uwc.onrender.com/payment-failed";
+const FRONTEND_SUCCESS_URL = "https://uwcindia.in/payment-success";
+const FRONTEND_FAILURE_URL = "https://uwcindia.in/payment-failed";
 
-// ✅ Supabase Client Configuration
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_ANON_KEY
 );
 
-// ✅ Function to Generate PhonePe Checksum
 const generateChecksum = (payload, endpoint) => {
   const string = payload + endpoint + MERCHANT_KEY;
   const sha256 = crypto.createHash("sha256").update(string).digest("hex");
   return sha256 + "###" + KEY_INDEX;
 };
 
-// ✅ Route: Create Order & Initiate Payment
 app.post("/create-order", async (req, res) => {
   try {
     const { name, mobileNumber, amount, email, address, service_type } =
       req.body;
-    if (!name || !mobileNumber || !amount || !service_type) {
+
+    if (!name || !mobileNumber || !amount) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
@@ -69,7 +67,7 @@ app.post("/create-order", async (req, res) => {
       amount: Number(amount) * 100,
       currency: "INR",
       merchantTransactionId: orderId,
-      redirectUrl: successUrl,
+      redirectUrl: "https://backend-uwc.onrender.com/payment-success",
       redirectMode: "POST",
       paymentInstrument: { type: "PAY_PAGE" },
     };
@@ -92,7 +90,7 @@ app.post("/create-order", async (req, res) => {
     );
 
     if (response.data.success) {
-      await supabase.from("orders").insert([
+      const { error } = await supabase.from("orders").insert([
         {
           order_id: orderId,
           name,
@@ -106,114 +104,99 @@ app.post("/create-order", async (req, res) => {
         },
       ]);
 
+      if (error) throw error;
+
       return res.status(200).json({
         msg: "OK",
         url: response.data.data.instrumentResponse.redirectInfo.url,
       });
-    } else {
-      throw new Error(response.data.message || "Failed to initiate payment");
     }
+    throw new Error(response.data.message || "Payment initiation failed");
   } catch (error) {
-    console.error("Error in payment initiation:", error.message);
-    res.status(500).json({ error: error.message || "Internal Server Error" });
+    console.error("Create Order Error:", error);
+    return res.status(500).json({ error: error.message });
   }
 });
 
-// ✅ POST Route: Handle Payment Success
 app.post("/payment-success", async (req, res) => {
   try {
-    console.log("Request Body:", req.body);
-    console.log("Request Query:", req.query);
-
     const merchantTransactionId =
-      req.body.merchantTransactionId ||
-      req.body.id ||
-      req.body.transactionId ||
-      req.query.id ||
-      req.query.merchantTransactionId ||
-      req.query.transactionId;
+      req.body.transactionId || req.body.merchantTransactionId || req.query.id;
 
     if (!merchantTransactionId) {
-      return res.status(400).json({ error: "Transaction ID is required" });
-    }
-
-    const { data: existingOrder, error: fetchError } = await supabase
-      .from("orders")
-      .select("order_id")
-      .eq("order_id", merchantTransactionId)
-      .single();
-
-    if (fetchError) {
-      console.error("Supabase Fetch Error:", fetchError.message);
-    }
-
-    if (existingOrder) {
-      console.log("Order already exists. Skipping insertion.");
-      return res.redirect(`/payment-success?order_id=${merchantTransactionId}`);
+      return res.redirect(`${FRONTEND_FAILURE_URL}?error=missing_transaction_id`);
     }
 
     const checksum = generateChecksum(
       "",
       `/pg/v1/status/${MERCHANT_ID}/${merchantTransactionId}`
     );
-    const response = await axios.get(
+
+    const statusResponse = await axios.get(
       `${MERCHANT_STATUS_URL}/${MERCHANT_ID}/${merchantTransactionId}`,
       {
         headers: {
-          accept: "application/json",
-          "Content-Type": "application/json",
           "X-VERIFY": checksum,
           "X-MERCHANT-ID": MERCHANT_ID,
         },
       }
     );
 
-    if (response.data.success) {
-      const paymentData = response.data.data;
-      console.log("Payment Success:", paymentData);
+    if (statusResponse.data.success) {
+      const paymentData = statusResponse.data.data;
 
-      const { error } = await supabase.from("orders").update({
+      const { data: existingOrder } = await supabase
+        .from("orders")
+        .select("*")
+        .eq("order_id", merchantTransactionId)
+        .single();
+
+      const updateData = {
         status: paymentData.state,
         transaction_id: paymentData.transactionId,
         payment_method: paymentData.paymentInstrument.type,
-      }).eq("order_id", merchantTransactionId);
+        updated_at: new Date().toISOString(),
+      };
 
-      if (error) {
-        console.error("Supabase Update Error:", error.message);
+      if (!existingOrder.service_type && req.body.service_type) {
+        updateData.service_type = req.body.service_type;
       }
 
-      return res.redirect(`https://backend-uwc.onrender.com/payment-success?order_id=${merchantTransactionId}`);
-    } else {
-      return res.redirect(failureUrl);
+      const { error } = await supabase
+        .from("orders")
+        .update(updateData)
+        .eq("order_id", merchantTransactionId);
+
+      if (error) throw error;
+
+      return res.redirect(`${FRONTEND_SUCCESS_URL}/${merchantTransactionId}`);
     }
+    return res.redirect(FRONTEND_FAILURE_URL);
   } catch (error) {
-    console.error("Error fetching payment status:", error.message);
-    res.status(500).json({ error: error.message || "Internal Server Error" });
+    console.error("Payment Success Error:", error);
+    return res.redirect(
+      `${FRONTEND_FAILURE_URL}?error=${encodeURIComponent(error.message)}`
+    );
   }
 });
 
-// ✅ GET Route: Fetch Order Details
 app.get("/order/:id", async (req, res) => {
   try {
     const { id } = req.params;
-
     const { data, error } = await supabase
       .from("orders")
       .select("*")
       .eq("order_id", id)
       .single();
 
-    if (error || !data) {
-      return res.status(404).json({ error: "Order not found" });
-    }
-
+    if (error || !data) throw new Error("Order not found");
     res.json(data);
   } catch (error) {
-    console.error("Error fetching order details:", error.message);
-    res.status(500).json({ error: "Internal Server Error" });
+    console.error("Order Fetch Error:", error);
+    res.status(500).json({ error: error.message });
   }
 });
 
 app.listen(8000, () => {
-  console.log("Server is running on port 8000");
+  console.log("Server running on port 8000");
 });
