@@ -36,8 +36,8 @@ const MERCHANT_STATUS_URL =
   process.env.MERCHANT_STATUS_URL ||
   "https://api.phonepe.com/apis/hermes/pg/v1/status";
 
-const FRONTEND_SUCCESS_URL = "https://uwcindia.in/payment-success";
-const FRONTEND_FAILURE_URL = "https://uwcindia.in/payment-failed";
+const FRONTEND_SUCCESS_URL = "https://backend-uwc.onrender.com/payment-success";
+const FRONTEND_FAILURE_URL = "https://backend-uwc.onrender.com/payment-failed";
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -155,12 +155,15 @@ app.post("/payment-success", async (req, res) => {
         status: paymentData.state,
         transaction_id: paymentData.transactionId,
         payment_method: paymentData.paymentInstrument.type,
-        updated_at: new Date().toISOString(),
       };
 
-      if (!existingOrder.service_type && req.body.service_type) {
+      // Only add service_type if it's missing
+      if (!existingOrder?.service_type && req.body.service_type) {
         updateData.service_type = req.body.service_type;
       }
+
+      // Add updated_at only after creating the column
+      // updateData.updated_at = new Date().toISOString();
 
       const { error } = await supabase
         .from("orders")
@@ -179,7 +182,6 @@ app.post("/payment-success", async (req, res) => {
     );
   }
 });
-
 app.get("/order/:id", async (req, res) => {
   try {
     const { id } = req.params;
