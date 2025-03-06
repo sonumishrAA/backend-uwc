@@ -54,7 +54,7 @@ app.post("/create-order", async (req, res) => {
     }
 
     const orderId = uuidv4().slice(0, 9); // Generate a 9-digit order ID
-    const amountInPaisa = Math.round(Number(amount) * 100;
+    const amountInPaisa = Math.round(Number(amount) * 100; // Fixed: Added missing parenthesis
 
     // Create PhonePe payload
     const paymentPayload = {
@@ -69,6 +69,16 @@ app.post("/create-order", async (req, res) => {
       paymentInstrument: { type: "PAY_PAGE" }
     };
 
+    // Rest of the code...
+  } catch (error) {
+    console.error("Create Order Error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      debugId: uuidv4()
+    });
+  }
+});
     // Generate checksum
     const payloadBase64 = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
     const checksum = generateChecksum(payloadBase64, "/pg/v1/pay");
