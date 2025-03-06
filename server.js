@@ -16,7 +16,7 @@ app.use(express.urlencoded({ extended: true }));
 
 // Enhanced CORS configuration
 app.use(cors({
-  origin: "https://uwcindia.in",
+  origin: ["https://uwcindia.in", "http://localhost:5173"], // Allow both production and localhost
   methods: ["GET", "POST"],
   credentials: true
 }));
@@ -111,10 +111,11 @@ app.post("/create-order", async (req, res) => {
 
     if (error) throw error;
 
-    // Return payment URL
+    // Return payment URL and order ID
     res.json({
       success: true,
-      paymentUrl: response.data.data.instrumentResponse.redirectInfo.url
+      paymentUrl: response.data.data.instrumentResponse.redirectInfo.url,
+      orderId // Pass order ID to frontend
     });
 
   } catch (error) {
@@ -154,7 +155,7 @@ app.post("/payment-success", async (req, res) => {
     if (statusResponse.data?.success) {
       const paymentData = statusResponse.data.data;
 
-      // Update order status
+      // Update order status in Supabase
       const { error } = await supabase
         .from("orders")
         .update({
@@ -205,6 +206,15 @@ app.get("/order/:id", async (req, res) => {
       error: error.message 
     });
   }
+});
+
+// Success page route
+app.get("/payment-success", (req, res) => {
+  const orderId = req.query.order_id;
+  if (!orderId) {
+    return res.redirect(`${FRONTEND_FAILURE_URL}?error=missing_order_id`);
+  }
+  res.redirect(`https://uwcindia.in/success-page?order_id=${orderId}`);
 });
 
 const PORT = process.env.PORT || 8000;
