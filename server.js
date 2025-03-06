@@ -54,7 +54,7 @@ app.post("/create-order", async (req, res) => {
     }
 
     const orderId = uuidv4().slice(0, 9); // Generate a 9-digit order ID
-    const amountInPaisa = Math.round(Number(amount) * 100; // Fixed: Added missing parenthesis
+    const amountInPaisa = Math.round(Number(amount)) * 100;
 
     // Create PhonePe payload
     const paymentPayload = {
