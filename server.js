@@ -5,8 +5,6 @@ import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
-import path from "path";
-import { fileURLToPath } from "url";
 
 dotenv.config();
 
@@ -20,9 +18,6 @@ app.use(cors({
   methods: ["GET", "POST"],
   credentials: true
 }));
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // PhonePe configuration
 const MERCHANT_ID = process.env.MERCHANT_ID;
@@ -58,7 +53,7 @@ app.post("/create-order", async (req, res) => {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    const orderId = uuidv4();
+    const orderId = uuidv4().slice(0, 9); // Generate a 9-digit order ID
     const amountInPaisa = Math.round(Number(amount) * 100;
 
     // Create PhonePe payload
@@ -101,7 +96,7 @@ app.post("/create-order", async (req, res) => {
       order_id: orderId,
       name,
       email,
-      phone_no: mobileNumber,
+      mobileNumber,
       address,
       service_type,
       amount: Number(amount),
@@ -161,7 +156,8 @@ app.post("/payment-success", async (req, res) => {
         .update({
           status: paymentData.state,
           transaction_id: paymentData.transactionId,
-          payment_method: paymentData.paymentInstrument?.type,
+          payment_date: new Date().toISOString().split("T")[0], // Current date
+          payment_time: new Date().toISOString().split("T")[1].split(".")[0], // Current time
           updated_at: new Date().toISOString()
         })
         .eq("order_id", transactionId);
