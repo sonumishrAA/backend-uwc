@@ -1,3 +1,4 @@
+// server.js (Backend)
 import express from "express";
 import crypto from "crypto";
 import cors from "cors";
@@ -11,7 +12,11 @@ const app = express();
 const port = process.env.PORT || 8000;
 
 app.use(express.json());
-app.use(cors());
+app.use(cors({
+  origin: process.env.NODE_ENV === 'production' 
+    ? process.env.FRONTEND_URL 
+    : 'http://localhost:5173'
+}));
 
 // Supabase Configuration
 const supabase = createClient(
@@ -19,44 +24,44 @@ const supabase = createClient(
   process.env.SUPABASE_KEY
 );
 
-// PhonePe Configuration
+// PhonePe Production Configuration
 const PHONEPE_CONFIG = {
   merchantId: process.env.MERCHANT_ID,
   saltKey: process.env.PHONEPE_SALT_KEY,
-  saltIndex: process.env.PHONEPE_SALT_INDEX,
+  saltIndex: process.env.PHONEPE_SALT_INDEX || 1,
   baseUrl: "https://api.phonepe.com/apis/hermes"
 };
 
 // Generate Transaction ID
-const generateTxnId = () => `TXN${Date.now()}${Math.floor(Math.random() * 1000)}`;
+const generateTxnId = () => `TXN${Date.now()}${Math.floor(Math.random().toString().slice(2,6)}`;
 
-// Save to Orders Table
+// Enhanced saveOrderToSupabase with validation
 const saveOrderToSupabase = async (orderData) => {
   try {
     const { data, error } = await supabase
       .from('orders')
-      .insert([orderData])
-      .select();
+      .insert(orderData)
+      .select()
+      .single();
 
-    if (error) throw error;
-    return data[0];
+    if (error) throw new Error(`Supabase Error: ${error.message}`);
+    return data;
   } catch (error) {
-    console.error('Supabase Error:', error);
+    console.error('Database Error:', error.message);
     throw error;
   }
 };
 
-// Create Order Endpoint
+// Production-ready create-order endpoint
 app.post("/create-order", async (req, res) => {
   try {
+    // Validate input
     const { name, email, mobileNumber, address, service_type, amount } = req.body;
-
-    // Validation
-    if (amount < 1) {
-      return res.status(400).json({ error: "Minimum amount is ₹1" });
+    if (!/^\d{10}$/.test(mobileNumber)) {
+      return res.status(400).json({ error: "Invalid mobile number format" });
     }
 
-    // Create Transaction Data
+    // Create transaction record
     const txnId = generateTxnId();
     const orderData = {
       txn_id: txnId,
@@ -65,29 +70,26 @@ app.post("/create-order", async (req, res) => {
       phone: mobileNumber,
       address,
       service_type,
-      amount,
+      amount: Number(amount),
       status: "PENDING",
-      payment_details: null
+      created_at: new Date().toISOString()
     };
 
-    // Save initial order data
+    // Save to database
     await saveOrderToSupabase(orderData);
 
-    // Prepare PhonePe Payment
- const paymentPayload = {
-  merchantId: PHONEPE_CONFIG.merchantId,
-  merchantTransactionId: txnId,
-  amount: amount * 100, // Amount in paise
-  merchantUserId: "CUSTOMER_"+mobileNumber, // Add prefix
-  redirectUrl: `${process.env.BASE_URL}/payment/success`,
-  redirectMode: "POST",
-  callbackUrl: `${process.env.BASE_URL}/payment/callback`, // Add callback
-  paymentInstrument: { 
-    type: "PAY_PAGE"
-  }
-};
+    // Prepare PhonePe payload
+    const paymentPayload = {
+      merchantId: PHONEPE_CONFIG.merchantId,
+      merchantTransactionId: txnId,
+      amount: Math.round(amount * 100), // Convert to paise
+      merchantUserId: `CUST_${mobileNumber}`,
+      redirectUrl: `${process.env.BASE_URL}/payment/success`,
+      redirectMode: "POST",
+      paymentInstrument: { type: "PAY_PAGE" }
+    };
 
-    // Generate Checksum
+    // Generate secure checksum
     const base64Payload = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
     const checksumString = `/pg/v1/pay${base64Payload}${PHONEPE_CONFIG.saltKey}`;
     const checksum = crypto
@@ -95,7 +97,7 @@ app.post("/create-order", async (req, res) => {
       .update(checksumString)
       .digest('hex');
 
-    // Initiate Payment (Single Response declaration)
+    // Make API request
     const paymentResponse = await fetch(`${PHONEPE_CONFIG.baseUrl}/pg/v1/pay`, {
       method: "POST",
       headers: {
@@ -106,26 +108,30 @@ app.post("/create-order", async (req, res) => {
     });
 
     const result = await paymentResponse.json();
-    
-    if (!result.data || !result.data.instrumentResponse) {
-      console.error("PhonePe API Error:", result);
-      throw new Error("Payment gateway response malformed");
+
+    // Validate response
+    if (!result?.data?.instrumentResponse?.redirectInfo?.url) {
+      console.error("PhonePe Error Response:", result);
+      throw new Error("Payment gateway configuration error");
     }
 
     res.json({
       success: true,
-      url: result.data.instrumentResponse.redirectInfo.url
+      url: result.data.instrumentResponse.redirectInfo.url,
+      txnId // Send transaction ID to client
     });
 
   } catch (error) {
-    console.error("Server Error:", {
+    console.error("Payment Error:", {
       message: error.message,
-      stack: error.stack
+      stack: error.stack,
+      timestamp: new Date().toISOString()
     });
     
     res.status(500).json({
-      error: error.message || "Payment initialization failed",
-      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+      error: "Payment processing failed",
+      code: "PAYMENT_ERROR",
+      supportId: `ERR-${Date.now()}`
     });
   }
 });
@@ -133,22 +139,22 @@ app.post("/create-order", async (req, res) => {
 // Payment Success Webhook
 app.post("/payment/success", async (req, res) => {
   try {
-    const { txn_id, ...paymentData } = req.body;
+    const { transactionId, code, ...paymentData } = req.body;
     
-    // Update payment details
     await supabase
       .from("orders")
       .update({ 
-        status: "SUCCESS",
-        payment_details: paymentData
+        status: code === "PAYMENT_SUCCESS" ? "SUCCESS" : "FAILED",
+        payment_details: paymentData,
+        updated_at: new Date().toISOString()
       })
-      .eq("txn_id", txn_id);
+      .eq("txn_id", transactionId);
 
-    res.redirect(`${process.env.FRONTEND_URL}/success?txn_id=${txn_id}`);
+    res.redirect(`${process.env.FRONTEND_URL}/payment-success?txn_id=${transactionId}`);
   } catch (error) {
-    console.error("Payment Success Error:", error);
-    res.redirect(`${process.env.FRONTEND_URL}/error`);
+    console.error("Webhook Error:", error);
+    res.redirect(`${process.env.FRONTEND_URL}/payment-error`);
   }
 });
 
-app.listen(port, () => console.log(`Server running on port ${port}`));
+app.listen(port, () => console.log(`🚀 Production server running on port ${port}`));
