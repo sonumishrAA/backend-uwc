@@ -50,16 +50,7 @@ const saveOrderToSupabase = async (orderData) => {
 app.post("/create-order", async (req, res) => {
   try {
     const { name, email, mobileNumber, address, service_type, amount } = req.body;
- const response = await fetch(`${PHONEPE_CONFIG.baseUrl}/pg/v1/pay`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-VERIFY": `${checksum}###${PHONEPE_CONFIG.saltIndex}`
-      },
-      body: JSON.stringify({ request: base64Payload })
-    });
 
-    const result = await response.json();
     // Validation
     if (amount < 1) {
       return res.status(400).json({ error: "Minimum amount is ₹1" });
@@ -101,8 +92,8 @@ app.post("/create-order", async (req, res) => {
       .update(checksumString)
       .digest('hex');
 
-    // Initiate Payment
-    const response = await fetch(`${PHONEPE_CONFIG.baseUrl}/pg/v1/pay`, {
+    // Initiate Payment (Single Response declaration)
+    const paymentResponse = await fetch(`${PHONEPE_CONFIG.baseUrl}/pg/v1/pay`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -111,7 +102,7 @@ app.post("/create-order", async (req, res) => {
       body: JSON.stringify({ request: base64Payload })
     });
 
-    const result = await response.json();
+    const result = await paymentResponse.json();
     
     if (!result.data || !result.data.instrumentResponse) {
       console.error("PhonePe API Error:", result);
@@ -126,7 +117,6 @@ app.post("/create-order", async (req, res) => {
   } catch (error) {
     console.error("Server Error:", {
       message: error.message,
-      response: error.response?.data || "No response",
       stack: error.stack
     });
     
@@ -136,6 +126,7 @@ app.post("/create-order", async (req, res) => {
     });
   }
 });
+
 // Payment Success Webhook
 app.post("/payment/success", async (req, res) => {
   try {
