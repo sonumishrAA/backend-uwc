@@ -36,7 +36,6 @@ const saveOrderToSupabase = async (orderData) => {
     const { data, error } = await supabase
       .from('orders')
       .insert([orderData]);
-
     if (error) throw new Error(`Database Error: ${error.message}`);
     return data;
   } catch (error) {
@@ -55,12 +54,20 @@ app.post("/create-order", async (req, res) => {
     const txnId = generateTxnId();
     const orderData = {
       txn_id: txnId,
-      name, email, phone: mobileNumber, address, service_type,
-      amount: Number(amount), status: "PENDING",
+      name,
+      email,
+      phone: mobileNumber,
+      address,
+      service_type,
+      amount: Number(amount),
+      status: "PENDING",
       created_at: new Date().toISOString()
     };
 
     await saveOrderToSupabase(orderData);
+    
+    // Ensure that process.env.BASE_URL points to your backend URL (e.g., "http://localhost:8000/")
+    const redirectUrl = `${process.env.BASE_URL}payment/success?txn_id=${txnId}`;
     
     // Prepare Payment Request
     const paymentPayload = {
@@ -68,7 +75,7 @@ app.post("/create-order", async (req, res) => {
       merchantTransactionId: txnId,
       amount: Math.round(amount * 100),
       merchantUserId: `CUST_${mobileNumber}`,
-      redirectUrl: `${process.env.BASE_URL}payment/success?txn_id=${txnId}`,
+      redirectUrl: redirectUrl,
       redirectMode: "POST",
       paymentInstrument: { type: "PAY_PAGE" }
     };
@@ -88,7 +95,11 @@ app.post("/create-order", async (req, res) => {
     });
     
     const result = await paymentResponse.json();
-    if (!result?.data?.instrumentResponse?.redirectInfo?.url) throw new Error("Payment gateway error");
+    console.log("PhonePe Response:", JSON.stringify(result, null, 2));
+    if (!result?.data?.instrumentResponse?.redirectInfo?.url) {
+      console.error("Unexpected PhonePe response:", result);
+      throw new Error("Payment gateway error");
+    }
     
     res.json({ success: true, url: result.data.instrumentResponse.redirectInfo.url, txnId });
   } catch (error) {
