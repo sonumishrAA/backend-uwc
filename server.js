@@ -1,7 +1,6 @@
 import express from "express";
 import crypto from "crypto";
 import cors from "cors";
-import fetch from "node-fetch";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 
@@ -23,13 +22,12 @@ const supabase = createClient(
 const PHONEPE_CONFIG = {
   merchantId: process.env.MERCHANT_ID,
   saltKey: process.env.PHONEPE_SALT_KEY,
-  saltIndex: process.env.PHONEPE_SALT_INDEX || 1,
-  baseUrl: "https://api.phonepe.com/apis/hermes"
+  saltIndex: process.env.PHONEPE_SALT_INDEX,
+  baseUrl: "https://api-preprod.phonepe.com/apis/pg-sandbox"
 };
 
-// Fixed Transaction ID Generation
-const generateTxnId = () => 
-  `TXN${Date.now()}${Math.floor(Math.random() * 9000 + 1000)}`;
+// Generate Transaction ID
+const generateTxnId = () => `TXN${Date.now()}${Math.floor(Math.random() * 1000)}`;
 
 // Save to Orders Table
 const saveOrderToSupabase = async (orderData) => {
@@ -50,45 +48,42 @@ const saveOrderToSupabase = async (orderData) => {
 // Create Order Endpoint
 app.post("/create-order", async (req, res) => {
   try {
-    const { name, email, mobileNumber, address, service_type, amount } = req.body;
+    const { name, email, phone, address, service_type, amount } = req.body;
 
-    // Validation
-    if (amount < 1) {
-      return res.status(400).json({ error: "Minimum amount is ₹1" });
+    // Validate input
+    if (!name || !email || !phone || !address || !amount) {
+      return res.status(400).json({ error: "All fields are required" });
     }
 
-    // Create Transaction Data
+    // Create transaction data
     const txnId = generateTxnId();
     const orderData = {
       txn_id: txnId,
       name,
       email,
-      phone: mobileNumber,
+      phone,
       address,
       service_type,
       amount,
       status: "PENDING",
-      payment_details: null
+      created_at: new Date().toISOString()
     };
 
-    // Save initial order data
+    // Save to Supabase
     await saveOrderToSupabase(orderData);
 
-    // Prepare PhonePe Payment
+    // Prepare PhonePe payload
     const paymentPayload = {
       merchantId: PHONEPE_CONFIG.merchantId,
       merchantTransactionId: txnId,
       amount: amount * 100,
-      merchantUserId: "CUSTOMER_"+mobileNumber,
-      redirectUrl: `${process.env.BASE_URL}/payment/success`,
+      merchantUserId: `USER_${phone}`,
+      redirectUrl: `${process.env.BASE_URL}/payment/success?txn_id=${txnId}`,
       redirectMode: "POST",
-      callbackUrl: `${process.env.BASE_URL}/payment/callback`,
-      paymentInstrument: { 
-        type: "PAY_PAGE"
-      }
+      paymentInstrument: { type: "PAY_PAGE" }
     };
 
-    // Generate Checksum
+    // Generate checksum
     const base64Payload = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
     const checksumString = `/pg/v1/pay${base64Payload}${PHONEPE_CONFIG.saltKey}`;
     const checksum = crypto
@@ -96,8 +91,8 @@ app.post("/create-order", async (req, res) => {
       .update(checksumString)
       .digest('hex');
 
-    // Initiate Payment
-    const paymentResponse = await fetch(`${PHONEPE_CONFIG.baseUrl}/pg/v1/pay`, {
+    // Initiate payment
+    const response = await fetch(`${PHONEPE_CONFIG.baseUrl}/pg/v1/pay`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -106,22 +101,23 @@ app.post("/create-order", async (req, res) => {
       body: JSON.stringify({ request: base64Payload })
     });
 
-    const result = await paymentResponse.json();
-    
-    if (!result.data || !result.data.instrumentResponse) {
-      console.error("PhonePe API Error:", result);
-      throw new Error("Payment gateway response malformed");
+    const result = await response.json();
+
+    if (!result.data?.instrumentResponse?.redirectInfo?.url) {
+      throw new Error("Payment gateway error");
     }
 
     res.json({
       success: true,
-      url: result.data.instrumentResponse.redirectInfo.url
+      url: result.data.instrumentResponse.redirectInfo.url,
+      txnId
     });
 
   } catch (error) {
-    console.error("Server Error:", error);
-    res.status(500).json({
-      error: error.message || "Payment initialization failed"
+    console.error("Payment Error:", error);
+    res.status(500).json({ 
+      error: error.message || "Payment initialization failed",
+      code: "PAYMENT_ERROR"
     });
   }
 });
@@ -129,19 +125,25 @@ app.post("/create-order", async (req, res) => {
 // Payment Success Webhook
 app.post("/payment/success", async (req, res) => {
   try {
-    const { txn_id, ...paymentData } = req.body;
-    
-    await supabase
-      .from("orders")
+    const { txn_id } = req.query;
+    const paymentData = req.body;
+
+    // Update order status
+    const { error } = await supabase
+      .from('orders')
       .update({ 
         status: "SUCCESS",
-        payment_details: paymentData
+        payment_details: paymentData,
+        updated_at: new Date().toISOString()
       })
-      .eq("txn_id", txn_id);
+      .eq('txn_id', txn_id);
+
+    if (error) throw error;
 
     res.redirect(`${process.env.FRONTEND_URL}/success?txn_id=${txn_id}`);
+
   } catch (error) {
-    console.error("Payment Success Error:", error);
+    console.error("Webhook Error:", error);
     res.redirect(`${process.env.FRONTEND_URL}/error`);
   }
 });
