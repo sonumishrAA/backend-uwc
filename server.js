@@ -32,13 +32,22 @@ const generateTxnId = () => `TXN${Date.now()}${Math.floor(Math.random() * 1000)}
 
 // Save to Orders Table
 const saveOrderToSupabase = async (orderData) => {
-  const { data, error } = await supabase
-    .from("orders")
-    .insert([orderData])
-    .select();
+  try {
+    const { data, error } = await supabase
+      .from('orders')
+      .insert([orderData])
+      .select();
 
-  if (error) throw new Error("Supabase save failed");
-  return data[0];
+    if (error) {
+      console.error('Supabase Error Details:', error);
+      throw new Error(error.message);
+    }
+    
+    return data[0];
+  } catch (error) {
+    console.error('Database Connection Error:', error);
+    throw error;
+  }
 };
 
 // Create Order Endpoint
