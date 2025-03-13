@@ -68,6 +68,13 @@ app.post("/create-order", async (req, res) => {
       status: "PENDING",
       created_at: new Date().toISOString()
     };
+if (process.env.NODE_ENV === 'production') {
+      if (amount < 100) { // Minimum ₹1 transaction
+        return res.status(400).json({ 
+          error: "Minimum transaction amount is ₹1" 
+        });
+      }
+    }
 
     // 2. Save to Supabase Before Payment
     await saveOrderToSupabase(orderData);
@@ -86,7 +93,10 @@ app.post("/create-order", async (req, res) => {
     // 4. Generate Checksum
     const base64Payload = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
     const checksumString = `/pg/v1/pay${base64Payload}${PHONEPE_CONFIG.saltKey}`;
-    const checksum = crypto.createHash("sha256").update(checksumString).digest("hex");
+    const checksum = crypto
+      .createHmac('sha256', PHONEPE_CONFIG.saltKey)
+      .update(checksumString)
+      .digest('hex');
 
     // 5. Initiate Payment
     const response = await fetch(`${PHONEPE_CONFIG.baseUrl}/pg/v1/pay`, {
@@ -106,14 +116,18 @@ app.post("/create-order", async (req, res) => {
     });
 
   } catch (error) {
-    console.error("Payment Error:", error);
-    res.status(500).json({ 
-      success: false,
-      message: error.response?.data?.message || "Payment failed" 
+    console.error("Production Error:", {
+      message: error.message,
+      stack: error.stack,
+      timestamp: new Date().toISOString()
+    });
+    
+    res.status(500).json({
+      error: "Payment processing failed",
+      referenceId: `ERR_${Date.now()}` // For support tracking
     });
   }
 });
-
 // Payment Success Handler
 app.get("/payment/success", async (req, res) => {
   const { txn_id } = req.query;
