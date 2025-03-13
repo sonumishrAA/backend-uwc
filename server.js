@@ -74,15 +74,18 @@ app.post("/create-order", async (req, res) => {
     await saveOrderToSupabase(orderData);
 
     // Prepare PhonePe Payment
-    const paymentPayload = {
-      merchantId: PHONEPE_CONFIG.merchantId,
-      merchantTransactionId: txnId,
-      amount: amount * 100,
-      merchantUserId: mobileNumber,
-      redirectUrl: `${process.env.BASE_URL}/payment/success?txn_id=${txnId}`,
-      redirectMode: "POST",
-      paymentInstrument: { type: "PAY_PAGE" }
-    };
+ const paymentPayload = {
+  merchantId: PHONEPE_CONFIG.merchantId,
+  merchantTransactionId: txnId,
+  amount: amount * 100, // Amount in paise
+  merchantUserId: "CUSTOMER_"+mobileNumber, // Add prefix
+  redirectUrl: `${process.env.BASE_URL}/payment/success`,
+  redirectMode: "POST",
+  callbackUrl: `${process.env.BASE_URL}/payment/callback`, // Add callback
+  paymentInstrument: { 
+    type: "PAY_PAGE"
+  }
+};
 
     // Generate Checksum
     const base64Payload = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
