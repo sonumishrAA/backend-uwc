@@ -50,7 +50,16 @@ const saveOrderToSupabase = async (orderData) => {
 app.post("/create-order", async (req, res) => {
   try {
     const { name, email, mobileNumber, address, service_type, amount } = req.body;
+ const response = await fetch(`${PHONEPE_CONFIG.baseUrl}/pg/v1/pay`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-VERIFY": `${checksum}###${PHONEPE_CONFIG.saltIndex}`
+      },
+      body: JSON.stringify({ request: base64Payload })
+    });
 
+    const result = await response.json();
     // Validation
     if (amount < 1) {
       return res.status(400).json({ error: "Minimum amount is ₹1" });
@@ -104,17 +113,29 @@ app.post("/create-order", async (req, res) => {
 
     const result = await response.json();
     
+    if (!result.data || !result.data.instrumentResponse) {
+      console.error("PhonePe API Error:", result);
+      throw new Error("Payment gateway response malformed");
+    }
+
     res.json({
       success: true,
       url: result.data.instrumentResponse.redirectInfo.url
     });
 
   } catch (error) {
-    console.error("Server Error:", error);
-    res.status(500).json({ error: "Payment processing failed" });
+    console.error("Server Error:", {
+      message: error.message,
+      response: error.response?.data || "No response",
+      stack: error.stack
+    });
+    
+    res.status(500).json({
+      error: error.message || "Payment initialization failed",
+      details: process.env.NODE_ENV === 'development' ? error.stack : undefined
+    });
   }
 });
-
 // Payment Success Webhook
 app.post("/payment/success", async (req, res) => {
   try {
