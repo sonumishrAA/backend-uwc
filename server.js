@@ -1,219 +1,134 @@
 import express from "express";
-import axios from "axios";
 import crypto from "crypto";
 import cors from "cors";
-import { v4 as uuidv4 } from "uuid";
+import fetch from "node-fetch";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 
 dotenv.config();
 
 const app = express();
+const port = process.env.PORT || 8000;
+
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+app.use(cors());
 
-// Enhanced CORS configuration
-app.use(cors({
-  origin: ["https://uwcindia.in", "http://localhost:5173"], // Allow both production and localhost
-  methods: ["GET", "POST"],
-  credentials: true
-}));
-
-// PhonePe configuration
-const MERCHANT_ID = process.env.MERCHANT_ID;
-const MERCHANT_KEY = process.env.MERCHANT_KEY;
-const KEY_INDEX = 1;
-const PHONEPE_BASE_URL = process.env.NODE_ENV === "production" 
-  ? "https://api.phonepe.com/apis/hermes"
-  : "https://api-preprod.phonepe.com/apis/merchant-simulator";
-
-// Frontend URLs
-const FRONTEND_SUCCESS_URL = "https://uwcindia.in/payment-success";
-const FRONTEND_FAILURE_URL = "https://uwcindia.in/payment-failed";
-
-// Supabase client
+// Supabase Configuration (Production)
 const supabase = createClient(
   process.env.SUPABASE_URL,
-  process.env.SUPABASE_ANON_KEY
+  process.env.SUPABASE_KEY
 );
 
-// Helper functions
-const generateChecksum = (payload, endpoint) => {
-  const string = payload + endpoint + MERCHANT_KEY;
-  return crypto.createHash("sha256").update(string).digest("hex") + "###" + KEY_INDEX;
+// PhonePe Production Config
+const PHONEPE_CONFIG = {
+  merchantId: process.env.MERCHANT_ID,
+  saltKey: process.env.PHONEPE_SALT_KEY,
+  saltIndex: process.env.PHONEPE_SALT_INDEX,
+  baseUrl: "https://api.phonepe.com/apis/hermes" // Production URL
 };
 
-// Create order endpoint
+// Generate Transaction ID
+const generateTxnId = () => `TXN${Date.now()}${Math.floor(Math.random() * 1000)}`;
+
+// Save to Orders Table
+const saveOrderToSupabase = async (orderData) => {
+  const { data, error } = await supabase
+    .from("orders")
+    .insert([orderData])
+    .select();
+
+  if (error) throw new Error("Supabase save failed");
+  return data[0];
+};
+
+// Create Order Endpoint
 app.post("/create-order", async (req, res) => {
   try {
-    const { name, mobileNumber, amount, email, address, service_type } = req.body;
+    const { name, email, phone, address, serviceType, amount } = req.body;
 
-    // Validation
-    if (!name || !mobileNumber || !amount || !service_type) {
-      return res.status(400).json({ error: "Missing required fields" });
-    }
+    // 1. Create Transaction Record
+    const txnId = generateTxnId();
+    const orderData = {
+      txn_id: txnId,
+      name,
+      email,
+      phone,
+      address,
+      service_type: serviceType,
+      amount,
+      status: "PENDING",
+      created_at: new Date().toISOString()
+    };
 
-    const orderId = uuidv4().slice(0, 9); // Generate a 9-digit order ID
-    const amountInPaisa = Math.round(Number(amount)) * 100;
+    // 2. Save to Supabase Before Payment
+    await saveOrderToSupabase(orderData);
 
-    // Create PhonePe payload
+    // 3. Prepare PhonePe Payment
     const paymentPayload = {
-      merchantId: MERCHANT_ID,
-      merchantTransactionId: orderId,
-      merchantUserId: name.substring(0, 36),
-      amount: amountInPaisa,
-      currency: "INR",
-      redirectUrl: `${PHONEPE_BASE_URL}/payment-success`,
+      merchantId: PHONEPE_CONFIG.merchantId,
+      merchantTransactionId: txnId,
+      amount: amount * 100,
+      merchantUserId: phone,
+      redirectUrl: `${process.env.BASE_URL}/payment/success?txn_id=${txnId}`,
       redirectMode: "POST",
-      mobileNumber: mobileNumber.toString().slice(-10),
       paymentInstrument: { type: "PAY_PAGE" }
     };
 
-    // Generate checksum
-    const payloadBase64 = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
-    const checksum = generateChecksum(payloadBase64, "/pg/v1/pay");
+    // 4. Generate Checksum
+    const base64Payload = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
+    const checksumString = `/pg/v1/pay${base64Payload}${PHONEPE_CONFIG.saltKey}`;
+    const checksum = crypto.createHash("sha256").update(checksumString).digest("hex");
 
-    // Initiate PhonePe payment
-    const response = await axios.post(
-      `${PHONEPE_BASE_URL}/pg/v1/pay`,
-      { request: payloadBase64 },
-      {
-        headers: {
-          "Content-Type": "application/json",
-          "X-VERIFY": checksum
-        },
-        timeout: 10000
-      }
-    );
+    // 5. Initiate Payment
+    const response = await fetch(`${PHONEPE_CONFIG.baseUrl}/pg/v1/pay`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-VERIFY": `${checksum}###${PHONEPE_CONFIG.saltIndex}`
+      },
+      body: JSON.stringify({ request: base64Payload })
+    });
 
-    // Validate response
-    if (!response?.data?.data?.instrumentResponse?.redirectInfo?.url) {
-      throw new Error("Invalid response from payment gateway");
-    }
-
-    // Store order in Supabase
-    const { error } = await supabase.from("orders").insert([{
-      order_id: orderId,
-      name,
-      email,
-      mobileNumber,
-      address,
-      service_type,
-      amount: Number(amount),
-      status: "PENDING",
-      created_at: new Date().toISOString()
-    }]);
-
-    if (error) throw error;
-
-    // Return payment URL and order ID
+    const result = await response.json();
+    
     res.json({
       success: true,
-      paymentUrl: response.data.data.instrumentResponse.redirectInfo.url,
-      orderId // Pass order ID to frontend
+      url: result.data.instrumentResponse.redirectInfo.url
     });
 
   } catch (error) {
-    console.error("Create Order Error:", error);
-    res.status(500).json({
+    console.error("Payment Error:", error);
+    res.status(500).json({ 
       success: false,
-      error: error.message,
-      debugId: uuidv4()
+      message: error.response?.data?.message || "Payment failed" 
     });
   }
 });
 
-// Payment callback handler
-app.post("/payment-success", async (req, res) => {
-  try {
-    const transactionId = req.body.transactionId || req.body.merchantTransactionId;
-    
-    if (!transactionId) {
-      return res.redirect(`${FRONTEND_FAILURE_URL}?error=missing_transaction`);
-    }
+// Payment Success Handler
+app.get("/payment/success", async (req, res) => {
+  const { txn_id } = req.query;
+  
+  // Update Order Status
+  await supabase
+    .from("orders")
+    .update({ status: "SUCCESS" })
+    .eq("txn_id", txn_id);
 
-    // Verify payment status
-    const checksumPayload = `${MERCHANT_ID}/pg/v1/status/${MERCHANT_ID}/${transactionId}`;
-    const checksum = generateChecksum(checksumPayload, "");
-    
-    const statusResponse = await axios.get(
-      `${PHONEPE_BASE_URL}/pg/v1/status/${MERCHANT_ID}/${transactionId}`,
-      {
-        headers: {
-          "X-VERIFY": checksum,
-          "X-MERCHANT-ID": MERCHANT_ID
-        },
-        timeout: 10000
-      }
-    );
-
-    if (statusResponse.data?.success) {
-      const paymentData = statusResponse.data.data;
-
-      // Update order status in Supabase
-      const { error } = await supabase
-        .from("orders")
-        .update({
-          status: paymentData.state,
-          transaction_id: paymentData.transactionId,
-          payment_date: new Date().toISOString().split("T")[0], // Current date
-          payment_time: new Date().toISOString().split("T")[1].split(".")[0], // Current time
-          updated_at: new Date().toISOString()
-        })
-        .eq("order_id", transactionId);
-
-      if (error) throw error;
-
-      // Redirect to frontend with order ID
-      return res.redirect(`${FRONTEND_SUCCESS_URL}?order_id=${transactionId}`);
-    }
-
-    throw new Error("Payment verification failed");
-
-  } catch (error) {
-    console.error("Payment Callback Error:", error);
-    res.redirect(`${FRONTEND_FAILURE_URL}?error=${encodeURIComponent(error.message)}`);
-  }
+  // Redirect to Beautiful Success Page
+  res.redirect(`${process.env.FRONTEND_URL}/success?txn_id=${txn_id}`);
 });
 
-// Get order details
-app.get("/order/:id", async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { data, error } = await supabase
-      .from("orders")
-      .select("*")
-      .eq("order_id", id)
-      .single();
+// Payment Failure Handler
+app.get("/payment/failure", async (req, res) => {
+  const { txn_id } = req.query;
+  
+  await supabase
+    .from("orders")
+    .update({ status: "FAILED" })
+    .eq("txn_id", txn_id);
 
-    if (error || !data) throw new Error("Order not found");
-
-    res.json({
-      success: true,
-      data: {
-        ...data,
-        amount: data.amount / 100  // Convert back to INR
-      }
-    });
-
-  } catch (error) {
-    res.status(404).json({ 
-      success: false,
-      error: error.message 
-    });
-  }
+  res.redirect(`${process.env.FRONTEND_URL}/failure?txn_id=${txn_id}`);
 });
 
-// Success page route
-app.get("/payment-success", (req, res) => {
-  const orderId = req.query.order_id;
-  if (!orderId) {
-    return res.redirect(`${FRONTEND_FAILURE_URL}?error=missing_order_id`);
-  }
-  res.redirect(`https://uwcindia.in/success-page?order_id=${orderId}`);
-});
-
-const PORT = process.env.PORT || 8000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-});
+app.listen(port, () => console.log(`🚀 Production Server running on port ${port}`));
