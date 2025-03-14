@@ -50,7 +50,7 @@ app.post("/create-order", async (req, res) => {
       merchantUserId: `USER_${mobileNumber.slice(-4)}`,
       amount: Math.round(Number(amount) * 100),
       currency: "INR",
-      redirectUrl: "https://backend-uwc.onrender.com/payment-success",
+      redirectUrl: "https://uwcindia.in/payment-success",
       mobileNumber,
       paymentInstrument: { type: "PAY_PAGE" }
     };
