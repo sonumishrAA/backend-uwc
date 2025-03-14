@@ -25,13 +25,14 @@ const supabase = createClient(
 const MERCHANT_ID = process.env.MERCHANT_ID;
 const MERCHANT_KEY = process.env.MERCHANT_KEY;
 const KEY_INDEX = process.env.KEY_INDEX || 1;
-const PHONEPE_BASE_URL = "https://api.phonepe.com/apis/hermes";
+const PHONEPE_BASE_URL = process.env.PHONEPE_ENV === 'production' 
+  ? "https://api.phonepe.com/apis/hermes" 
+  : "https://api-preprod.phonepe.com/apis/pg-sandbox";
 
 // Helper functions
 const generateChecksum = (payload, endpoint) => {
-  const string = payload + endpoint + MERCHANT_KEY;
-  const sha256 = crypto.createHash("sha256").update(string).digest("hex");
-  return sha256 + "###" + KEY_INDEX;
+  const string = Buffer.from(payload).toString('utf8') + endpoint + MERCHANT_KEY;
+  return crypto.createHash("sha256").update(string).digest("hex") + "###" + KEY_INDEX;
 };
 
 // Create Order Endpoint
@@ -39,30 +40,31 @@ app.post("/create-order", async (req, res) => {
   try {
     const { name, mobileNumber, amount, email, address, service_type } = req.body;
 
-    // Validation
-    if (!name || !mobileNumber || !amount) {
-      return res.status(400).json({ error: "Missing required fields" });
+    // Enhanced validation
+    if (!name || !mobileNumber || !amount || !/^\d{10}$/.test(mobileNumber)) {
+      return res.status(400).json({ error: "Invalid/Missing required fields" });
     }
-    if (amount < 1) return res.status(400).json({ error: "Minimum amount is ₹1" });
 
     const orderId = uuidv4();
     const paymentPayload = {
       merchantId: MERCHANT_ID,
-      merchantUserId: name,
-      mobileNumber,
-      amount: Math.round(amount * 100),
-      currency: "INR",
       merchantTransactionId: orderId,
+      merchantUserId: `USER_${mobileNumber.slice(-4)}`,
+      amount: Math.round(Number(amount) * 100), // Ensure numeric conversion
+      currency: "INR",
       redirectUrl: `${process.env.BACKEND_URL}/payment-success`,
       redirectMode: "POST",
-      paymentInstrument: { type: "PAY_PAGE" },
+      mobileNumber: mobileNumber.toString(),
+      paymentInstrument: { type: "PAY_PAGE" }
     };
 
-    // Generate PhonePe request
+    // Debug logs
+    console.log("Payment Payload:", paymentPayload);
+    
     const base64Payload = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
     const checksum = generateChecksum(base64Payload, "/pg/v1/pay");
+    console.log("Generated Checksum:", checksum);
 
-    // Initiate payment
     const response = await axios.post(
       `${PHONEPE_BASE_URL}/pg/v1/pay`,
       { request: base64Payload },
@@ -70,24 +72,28 @@ app.post("/create-order", async (req, res) => {
         headers: {
           "Content-Type": "application/json",
           "X-VERIFY": checksum,
+          "X-CALLBACK-URL": `${process.env.BACKEND_URL}/payment-success` // Some environments require this
         },
+        timeout: 10000 // Add timeout
       }
     );
 
+    if (!response.data?.data?.instrumentResponse?.redirectInfo?.url) {
+      throw new Error("Invalid response from payment gateway");
+    }
+
     // Save to Supabase
-    const { error } = await supabase.from("orders").insert([
-      {
-        order_id: orderId,
-        name,
-        email,
-        phone_no: mobileNumber,
-        address,
-        service_type,
-        amount: Number(amount),
-        status: "PENDING",
-        created_at: new Date().toISOString(),
-      },
-    ]);
+    const { error } = await supabase.from("orders").insert([{
+      order_id: orderId,
+      name,
+      email,
+      phone_no: mobileNumber,
+      address,
+      service_type,
+      amount: Number(amount),
+      status: "PENDING",
+      created_at: new Date().toISOString(),
+    }]);
 
     if (error) throw error;
 
@@ -97,58 +103,61 @@ app.post("/create-order", async (req, res) => {
       orderId,
     });
   } catch (error) {
-    console.error("Create Order Error:", error);
-    res.status(500).json({ error: error.message });
+    console.error("Create Order Error:", error.response?.data || error.message);
+    res.status(500).json({ 
+      error: "Payment initiation failed",
+      details: error.response?.data || error.message
+    });
   }
 });
 
 // Payment Success Webhook
 app.post("/payment-success", async (req, res) => {
   try {
-    const { transactionId } = req.body;
-    const orderId = transactionId || req.query.orderId;
+    const { transactionId, merchantTransactionId } = req.body;
+    const orderId = transactionId || merchantTransactionId || req.query.orderId;
 
     if (!orderId) {
       return res.redirect(`${process.env.FRONTEND_FAILURE_URL}?error=missing_order_id`);
     }
 
-    // Verify payment status with PhonePe
-    const checksum = generateChecksum("", `/pg/v1/status/${MERCHANT_ID}/${orderId}`);
+    // Enhanced checksum generation for status check
+    const statusEndpoint = `/pg/v1/status/${MERCHANT_ID}/${orderId}`;
+    const checksum = generateChecksum("", statusEndpoint);
+    
     const statusResponse = await axios.get(
-      `${PHONEPE_BASE_URL}/pg/v1/status/${MERCHANT_ID}/${orderId}`,
+      `${PHONEPE_BASE_URL}${statusEndpoint}`,
       {
         headers: {
           "X-VERIFY": checksum,
           "X-MERCHANT-ID": MERCHANT_ID,
+          "Content-Type": "application/json"
         },
+        timeout: 10000
       }
     );
 
-    if (statusResponse.data.success) {
+    if (statusResponse.data?.success) {
       const paymentData = statusResponse.data.data;
-
+      
       // Update order in Supabase
       const { error } = await supabase
         .from("orders")
         .update({
           status: paymentData.state,
           transaction_id: paymentData.transactionId,
-          payment_method: paymentData.paymentInstrument.type,
+          payment_method: paymentData.paymentInstrument?.type || 'UNKNOWN',
           updated_at: new Date().toISOString(),
         })
         .eq("order_id", orderId);
-
-      if (error) throw error;
 
       return res.redirect(`${process.env.FRONTEND_SUCCESS_URL}/${orderId}`);
     }
 
     res.redirect(process.env.FRONTEND_FAILURE_URL);
   } catch (error) {
-    console.error("Payment Success Error:", error);
-    res.redirect(
-      `${process.env.FRONTEND_FAILURE_URL}?error=${encodeURIComponent(error.message)}`
-    );
+    console.error("Payment Verification Error:", error.response?.data || error.message);
+    res.redirect(`${process.env.FRONTEND_FAILURE_URL}?error=verification_failed`);
   }
 });
 
@@ -166,7 +175,7 @@ app.get("/order/:id", async (req, res) => {
     res.json(data);
   } catch (error) {
     console.error("Order Fetch Error:", error);
-    res.status(500).json({ error: error.message });
+    res.status(404).json({ error: error.message });
   }
 });
 
