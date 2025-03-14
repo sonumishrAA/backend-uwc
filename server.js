@@ -28,8 +28,7 @@ const FRONTEND_SUCCESS_URL = "https://uwcindia.in/success"; // Hardcoded success
 const FRONTEND_FAILURE_URL = "https://uwcindia.in/failure"; // Hardcoded failure URL
 
 
-const PHONEPE_BASE_URL =
-  PHONEPE_ENV ="https://api.phonepe.com/apis/hermes";
+const PHONEPE_BASE_URL =="https://api.phonepe.com/apis/hermes";
 
 // Helper function: Generate checksum
 const generateChecksum = (payload, endpoint) => {
