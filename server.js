@@ -22,26 +22,38 @@ const MERCHANT_ID = "M22PU06UWBZNO";
 const PHONEPE_KEY = "b3ac0315-843a-4560-9e49-118b67de175c";
 const PHONEPE_BASE_URL = "https://api.phonepe.com/apis/hermes";
 
-// ✅ 1. Payment Success Webhook (Status Update)
 app.post("/payment-success", async (req, res) => {
   try {
-    const { transactionId } = req.body;
-    
-    // Update Supabase Status
-    await supabase
-      .from("orders")
-      .update({ 
-        payment_status: "SUCCESS",
-        updated_at: new Date().toISOString()
-      })
-      .eq("transaction_id", transactionId);
+    const { transactionId, orderId } = req.body; // Ensure both transactionId and orderId are passed
 
+    if (!orderId) {
+      throw new Error("Order ID is missing");
+    }
+
+    // Update Supabase Status using order_id
+    const { data, error } = await supabase
+      .from("orders")
+      .update({
+        payment_status: "SUCCESS",
+        updated_at: new Date().toISOString(),
+      })
+      .eq("order_id", orderId); // Match with order_id
+
+    if (error || !data.length) {
+      throw new Error("Failed to update payment status or no matching order found");
+    }
+
+    console.log("Payment status updated successfully:", data);
+
+    // Redirect to success page
     res.redirect("https://uwcindia.in/success");
   } catch (error) {
-    console.error("Webhook Error:", error);
+    console.error("Webhook Error:", error.message);
     res.redirect("https://uwcindia.in/failure");
   }
 });
+
+
 
 // ✅ 2. Create Order Endpoint (Allow Multiple Orders per Email)
 app.post("/create-order", async (req, res) => {
