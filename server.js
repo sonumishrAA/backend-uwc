@@ -100,7 +100,7 @@ app.post("/payment-success", async (req, res) => {
 
       if (error) throw error;
 
-      return res.redirect(`${FRONTEND_SUCCESS_URL}/${orderId}`);
+      return res.redirect(FRONTEND_SUCCESS_URL);
     }
 
     res.redirect(FRONTEND_FAILURE_URL);
