@@ -23,7 +23,7 @@ const PHONEPE_KEY = "b3ac0315-843a-4560-9e49-118b67de175c";
 const PHONEPE_BASE_URL = "https://api.phonepe.com/apis/hermes";
 
 // ✅ 1. Payment Success Webhook (Status Update)
-app.post("/payment-success", async (req, res) => {
+app.post("/success", async (req, res) => {
   try {
     const { transactionId } = req.body;
     
