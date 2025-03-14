@@ -27,7 +27,7 @@ const BACKEND_URL = "https://backend-uwc.onrender.com"; // Hardcoded backend URL
 const FRONTEND_SUCCESS_URL = "https://uwcindia.in/success"; // Hardcoded success URL
 const FRONTEND_FAILURE_URL = "https://uwcindia.in/failure"; // Hardcoded failure URL
 
-const PHONEPE_ENV = "production";
+
 const PHONEPE_BASE_URL =
   PHONEPE_ENV ="https://api.phonepe.com/apis/hermes";
 
