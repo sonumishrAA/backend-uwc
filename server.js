@@ -22,26 +22,31 @@ const MERCHANT_ID = "M22PU06UWBZNO";
 const PHONEPE_KEY = "b3ac0315-843a-4560-9e49-118b67de175c";
 const PHONEPE_BASE_URL = "https://api.phonepe.com/apis/hermes";
 
-// ✅ Modified: Email-based Order Handling
+// ✅ 1. Payment Success Webhook (Status Update)
+app.post("/payment-success", async (req, res) => {
+  try {
+    const { transactionId } = req.body;
+    
+    // Update Supabase Status
+    await supabase
+      .from("orders")
+      .update({ 
+        payment_status: "SUCCESS",
+        updated_at: new Date().toISOString()
+      })
+      .eq("transaction_id", transactionId);
+
+    res.redirect("https://uwcindia.in/success");
+  } catch (error) {
+    console.error("Webhook Error:", error);
+    res.redirect("https://uwcindia.in/failure");
+  }
+});
+
+// ✅ 2. Create Order Endpoint (Allow Multiple Orders per Email)
 app.post("/create-order", async (req, res) => {
   try {
     const { email, name, mobileNumber, amount, address, service_type } = req.body;
-
-    // Email Validation
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      return res.status(400).json({ error: "Invalid email format" });
-    }
-
-    // Check Existing Order (Primary Key Conflict)
-    const { data: existingOrder } = await supabase
-      .from("orders")
-      .select("email")
-      .eq("email", email)
-      .single();
-
-    if (existingOrder) {
-      return res.status(400).json({ error: "Email already exists in orders" });
-    }
 
     // PhonePe Payment Initiation
     const paymentPayload = {
@@ -68,9 +73,9 @@ app.post("/create-order", async (req, res) => {
       { headers: { "X-VERIFY": checksum } }
     );
 
-    // ✅ Supabase Insert (Email as Primary Key)
+    // ✅ Supabase Insert (Allow Multiple Orders)
     const { error } = await supabase.from("orders").insert([{
-      email, // Primary Key
+      email, // Not primary key
       name,
       phone_no: mobileNumber,
       amount: Number(amount),
@@ -96,26 +101,6 @@ app.post("/create-order", async (req, res) => {
   }
 });
 
-// ✅ Simplified Payment Success Handler
-app.post("/payment-success", async (req, res) => {
-  try {
-    const { transactionId } = req.body;
-    
-    // Update Supabase Status
-    await supabase
-      .from("orders")
-      .update({ 
-        payment_status: "SUCCESS",
-        updated_at: new Date().toISOString()
-      })
-      .eq("transaction_id", transactionId);
-
-    res.redirect("https://uwcindia.in/success");
-  } catch (error) {
-    console.error("Webhook Error:", error);
-    res.redirect("https://uwcindia.in/failure");
-  }
-});
 
 app.listen(port, () => console.log(`Server running on port ${port}`));
 
