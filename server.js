@@ -47,7 +47,7 @@ app.post("/payment-success", async (req, res) => {
 app.post("/create-order", async (req, res) => {
   try {
     const { email, name, mobileNumber, amount, address, service_type } = req.body;
-
+const orderId = uuidv4();
     // PhonePe Payment Initiation
     const paymentPayload = {
       merchantId: MERCHANT_ID,
@@ -75,6 +75,7 @@ app.post("/create-order", async (req, res) => {
 
     // ✅ Supabase Insert (Allow Multiple Orders)
     const { error } = await supabase.from("orders").insert([{
+       order_id: orderId,
       email, // Not primary key
       name,
       phone_no: mobileNumber,
