@@ -87,8 +87,8 @@ const orderId = uuidv4();
 
     // ✅ Supabase Insert (Allow Multiple Orders)
     const { error } = await supabase.from("orders").insert([{
-       order_id: orderId,
-      email, // Not primary key
+      order_id: orderId,
+      email,
       name,
       phone_no: mobileNumber,
       amount: Number(amount),
@@ -96,16 +96,15 @@ const orderId = uuidv4();
       service_type,
       payment_status: "INITIATED",
       transaction_id: paymentPayload.merchantTransactionId,
-      created_at: new Date().toISOString()
+      created_at: new Date().toISOString()  // Using existing timestamp column
     }]);
 
     if (error) throw error;
 
-    res.json({
+    res.json({ 
       url: phonePeResponse.data.data.instrumentResponse.redirectInfo.url,
       txnId: paymentPayload.merchantTransactionId
     });
-
   } catch (error) {
     console.error("Payment Error:", error);
     res.status(500).json({ 
@@ -113,7 +112,6 @@ const orderId = uuidv4();
     });
   }
 });
-
 
 app.listen(port, () => console.log(`Server running on port ${port}`));
 
