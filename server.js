@@ -11,18 +11,20 @@ const port = 8000;
 app.use(express.json());
 app.use(cors({ origin: "https://uwcindia.in" }));
 
-// Supabase Config (Tera actual credentials daalna)
+// Supabase Config (Keep existing)
 const supabase = createClient(
   "https://pvtuhceijltezxhqibrv.supabase.co",
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB2dHVoY2Vpamx0ZXp4aHFpYnJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzk0Njk1MzMsImV4cCI6MjA1NTA0NTUzM30.kw49U2pX09mV9AjqqPMbipv2Dv6aSttqCXHhJQlmisY"
 );
 
-// PhonePe Config
-const MERCHANT_ID = "M22PU06UWBZNO";
-const PHONEPE_KEY = "b3ac0315-843a-4560-9e49-118b67de175c";
-const PHONEPE_BASE_URL = "https://api.phonepe.com/apis/hermes";
+// 🔴 Cashfree Config (Provide these credentials)
+const CASHFREE_APP_ID = "Y93963763787ea2f26f0fe1af9e736939";
+const CASHFREE_SECRET_KEY = "cfsk_ma_prod_25a32122a99a0240c0653d9d12f0e985_a44c9fcf";
+const CASHFREE_BASE_URL = "https://sandbox.cashfree.com/pg"; // Use production URL when live
 
+// ✅ Payment Success Endpoint (No changes needed if using same webhook format)
 app.post("/payment-success", async (req, res) => {
+  /* Existing code remains same */
   try {
     const { transactionId, orderId } = req.body; // Ensure both transactionId and orderId are passed
 
@@ -53,39 +55,50 @@ app.post("/payment-success", async (req, res) => {
   }
 });
 
-
-
-// ✅ 2. Create Order Endpoint (Allow Multiple Orders per Email)
+// ✅ Modified Create Order Endpoint for Cashfree
 app.post("/create-order", async (req, res) => {
   try {
     const { email, name, mobileNumber, amount, address, service_type } = req.body;
-const orderId = uuidv4();
-    // PhonePe Payment Initiation
+    const orderId = uuidv4();
+
+    // Cashfree Payment Payload
     const paymentPayload = {
-      merchantId: MERCHANT_ID,
-      merchantTransactionId: uuidv4(),
-      merchantUserId: `USER_${mobileNumber.slice(-4)}`,
-      amount: Math.round(Number(amount) * 100),
-      currency: "INR",
-      redirectUrl: "https://uwcindia.in/success",
-      mobileNumber,
-      paymentInstrument: { type: "PAY_PAGE" }
+      payment_session_id: uuidv4(),
+      order_id: orderId,
+      customer_details: {
+        customer_id: `USER_${mobileNumber.slice(-4)}`,
+        customer_phone: mobileNumber,
+        customer_name: name,
+        customer_email: email
+      },
+      order_amount: Number(amount),
+      order_currency: "INR",
+      order_note: service_type,
+      // Add return_url in Cashfree dashboard settings
     };
 
-    const base64Payload = Buffer.from(JSON.stringify(paymentPayload)).toString("base64");
-    const checksum = crypto
+    // Cashfree Signature Generation
+    const signatureData = `${paymentPayload.order_id}${paymentPayload.order_amount}${CASHFREE_SECRET_KEY}`;
+    const signature = crypto
       .createHash("sha256")
-      .update(base64Payload + "/pg/v1/pay" + PHONEPE_KEY)
-      .digest("hex") + "###1";
+      .update(signatureData)
+      .digest("hex");
 
-    // PhonePe API Call
-    const phonePeResponse = await axios.post(
-      `${PHONEPE_BASE_URL}/pg/v1/pay`,
-      { request: base64Payload },
-      { headers: { "X-VERIFY": checksum } }
+    // Cashfree API Call
+    const cashfreeResponse = await axios.post(
+      `${CASHFREE_BASE_URL}/orders`,
+      paymentPayload,
+      {
+        headers: {
+          "x-client-id": CASHFREE_APP_ID,
+          "x-client-secret": CASHFREE_SECRET_KEY,
+          "x-api-version": "2022-09-01",
+          "Content-Type": "application/json"
+        }
+      }
     );
 
-    // ✅ Supabase Insert (Allow Multiple Orders)
+    // ✅ Existing Supabase Insert (No changes)
     const { error } = await supabase.from("orders").insert([{
       order_id: orderId,
       email,
@@ -95,15 +108,15 @@ const orderId = uuidv4();
       address,
       service_type,
       payment_status: "INITIATED",
-      transaction_id: paymentPayload.merchantTransactionId,
-      created_at: new Date().toISOString()  // Using existing timestamp column
+      transaction_id: paymentPayload.payment_session_id,
+      created_at: new Date().toISOString()
     }]);
 
     if (error) throw error;
 
     res.json({ 
-      url: phonePeResponse.data.data.instrumentResponse.redirectInfo.url,
-      txnId: paymentPayload.merchantTransactionId
+      url: cashfreeResponse.data.payment_link, // Cashfree payment URL
+      txnId: paymentPayload.payment_session_id
     });
   } catch (error) {
     console.error("Payment Error:", error);
@@ -114,4 +127,3 @@ const orderId = uuidv4();
 });
 
 app.listen(port, () => console.log(`Server running on port ${port}`));
-
