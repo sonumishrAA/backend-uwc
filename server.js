@@ -3,7 +3,7 @@ import axios from "axios";
 import crypto from "crypto";
 import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
-import { createClient } from "@supabase/supabase-js";
+import { createClient } from "@supabase/supabase-supabase-js";
 
 const app = express();
 const port = 8000;
@@ -11,80 +11,61 @@ const port = 8000;
 app.use(express.json());
 app.use(cors({ origin: "https://uwcindia.in" }));
 
-// Supabase Config (Keep existing)
+// Supabase Config
 const supabase = createClient(
   "https://pvtuhceijltezxhqibrv.supabase.co",
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB2dHVoY2Vpamx0ZXp4aHFpYnJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzk0Njk1MzMsImV4cCI6MjA1NTA0NTUzM30.kw49U2pX09mV9AjqqPMbipv2Dv6aSttqCXHhJQlmisY"
 );
 
-// 🔴 Cashfree Config (Provide these credentials)
-const CASHFREE_APP_ID = "Y93963763787ea2f26f0fe1af9e736939";
+// ✅ Cashfree Production Config
+const CASHFREE_APP_ID = "CF33963763787EA2F26F0FE1AF9E736939"; // Production App ID
 const CASHFREE_SECRET_KEY = "cfsk_ma_prod_25a32122a99a0240c0653d9d12f0e985_a44c9fcf";
-const CASHFREE_BASE_URL = "https://sandbox.cashfree.com/pg"; // Use production URL when live
+const CASHFREE_BASE_URL = "https://api.cashfree.com/pg"; // Production URL
 
-// ✅ Payment Success Endpoint (No changes needed if using same webhook format)
-app.post("/payment-success", async (req, res) => {
-  /* Existing code remains same */
-  try {
-    const { transactionId, orderId } = req.body; // Ensure both transactionId and orderId are passed
+// ✅ Fixed Signature Generation with Timestamp
+const generateCashfreeSignature = (orderId, amount, secret) => {
+  const timestamp = new Date().toISOString();
+  const signatureData = `${orderId}${amount}${timestamp}${secret}`;
+  return {
+    signature: crypto.createHash('sha256').update(signatureData).digest('hex'),
+    timestamp
+  };
+};
 
-    if (!orderId) {
-      throw new Error("Order ID is missing");
-    }
-
-    // Update Supabase Status using order_id
-    const { data, error } = await supabase
-      .from("orders")
-      .update({
-        payment_status: "SUCCESS",
-        updated_at: new Date().toISOString(),
-      })
-      .eq("order_id", orderId); // Match with order_id
-
-    if (error || !data.length) {
-      throw new Error("Failed to update payment status or no matching order found");
-    }
-
-    console.log("Payment status updated successfully:", data);
-
-    // Redirect to success page
-    res.redirect("https://uwcindia.in/success");
-  } catch (error) {
-    console.error("Webhook Error:", error.message);
-    res.redirect("https://uwcindia.in/failure");
-  }
-});
-
-// ✅ Modified Create Order Endpoint for Cashfree
 app.post("/create-order", async (req, res) => {
   try {
     const { email, name, mobileNumber, amount, address, service_type } = req.body;
-    const orderId = uuidv4();
+    const orderId = `ORDER_${uuidv4()}`;
 
-    // Cashfree Payment Payload
+    // ✅ Production-ready Payment Payload
     const paymentPayload = {
       payment_session_id: uuidv4(),
       order_id: orderId,
+      order_amount: Math.round(Number(amount) * 100, // Convert to paise
+      order_currency: "INR",
       customer_details: {
-        customer_id: `USER_${mobileNumber.slice(-4)}`,
+        customer_id: `CUST_${mobileNumber.slice(-4)}`,
         customer_phone: mobileNumber,
         customer_name: name,
         customer_email: email
       },
-      order_amount: Number(amount),
-      order_currency: "INR",
-      order_note: service_type,
-      // Add return_url in Cashfree dashboard settings
+      order_meta: {
+        return_url: "https://uwcindia.in/success?order_id={order_id}"
+      },
+      order_tags: {
+        service_type,
+        address: address.substring(0, 50) // Truncate long addresses
+      }
     };
 
-    // Cashfree Signature Generation
-    const signatureData = `${paymentPayload.order_id}${paymentPayload.order_amount}${CASHFREE_SECRET_KEY}`;
-    const signature = crypto
-      .createHash("sha256")
-      .update(signatureData)
-      .digest("hex");
+    // ✅ Generate proper signature
+    const { signature, timestamp } = generateCashfreeSignature(
+      paymentPayload.order_id,
+      paymentPayload.order_amount,
+      CASHFREE_SECRET_KEY
+    );
 
-    // Cashfree API Call
+    // ✅ Production API Call with Security Headers
     const cashfreeResponse = await axios.post(
       `${CASHFREE_BASE_URL}/orders`,
       paymentPayload,
@@ -93,12 +74,19 @@ app.post("/create-order", async (req, res) => {
           "x-client-id": CASHFREE_APP_ID,
           "x-client-secret": CASHFREE_SECRET_KEY,
           "x-api-version": "2022-09-01",
+          "x-cf-signature": signature,
+          "x-cf-timestamp": timestamp,
           "Content-Type": "application/json"
         }
       }
     );
 
-    // ✅ Existing Supabase Insert (No changes)
+    // ✅ Enhanced Error Logging
+    if (!cashfreeResponse.data.payment_link) {
+      throw new Error("Cashfree payment link not generated");
+    }
+
+    // Supabase Insert
     const { error } = await supabase.from("orders").insert([{
       order_id: orderId,
       email,
@@ -114,16 +102,59 @@ app.post("/create-order", async (req, res) => {
 
     if (error) throw error;
 
-    res.json({ 
-      url: cashfreeResponse.data.payment_link, // Cashfree payment URL
+    res.json({
+      url: cashfreeResponse.data.payment_link,
       txnId: paymentPayload.payment_session_id
     });
+
   } catch (error) {
-    console.error("Payment Error:", error);
-    res.status(500).json({ 
-      error: error.response?.data?.message || "Payment failed" 
+    console.error("Production Payment Error:", {
+      message: error.message,
+      response: error.response?.data,
+      stack: error.stack
+    });
+    res.status(500).json({
+      error: "Payment processing failed",
+      code: "PAYMENT_GATEWAY_ERROR",
+      referenceId: uuidv4()
     });
   }
 });
 
-app.listen(port, () => console.log(`Server running on port ${port}`));
+// Payment Success Endpoint (Production Optimized)
+app.post("/payment-success", async (req, res) => {
+  try {
+    // ✅ Verify Cashfree Webhook Signature
+    const signature = req.headers['x-cf-signature'];
+    const receivedData = JSON.stringify(req.body);
+    const expectedSignature = crypto
+      .createHash('sha256')
+      .update(receivedData + CASHFREE_SECRET_KEY)
+      .digest('hex');
+
+    if (signature !== expectedSignature) {
+      throw new Error("Invalid webhook signature");
+    }
+
+    const { order_id, payment_status } = req.body;
+    
+    // Update database
+    const { data, error } = await supabase
+      .from("orders")
+      .update({
+        payment_status: payment_status === "SUCCESS" ? "SUCCESS" : "FAILED",
+        updated_at: new Date().toISOString()
+      })
+      .eq("order_id", order_id);
+
+    if (error) throw error;
+
+    res.status(200).send("Webhook processed");
+    
+  } catch (error) {
+    console.error("Production Webhook Error:", error);
+    res.status(400).send("Webhook processing failed");
+  }
+});
+
+app.listen(port, () => console.log(`Production server running on port ${port}`));
