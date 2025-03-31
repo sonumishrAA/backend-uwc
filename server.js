@@ -38,25 +38,21 @@ app.post("/create-order", async (req, res) => {
     const orderId = `ORDER_${uuidv4()}`;
 
     // ✅ Production-ready Payment Payload
-    const paymentPayload = {
-      payment_session_id: uuidv4(),
-      order_id: orderId,
-      order_amount: Math.round(Number(amount) * 100, // Convert to paise
-      order_currency: "INR",
-      customer_details: {
-        customer_id: `CUST_${mobileNumber.slice(-4)}`,
-        customer_phone: mobileNumber,
-        customer_name: name,
-        customer_email: email
-      },
-      order_meta: {
-        return_url: "https://uwcindia.in/success?order_id={order_id}"
-      },
-      order_tags: {
-        service_type,
-        address: address.substring(0, 50) // Truncate long addresses
-      }
-    };
+   const paymentPayload = {
+  payment_session_id: uuidv4(),
+  order_id: orderId,
+  order_amount: Math.round(Number(amount) * 100), // ✅ Fixed parenthesis
+  order_currency: "INR",
+  customer_details: {
+    customer_id: `CUST_${mobileNumber.slice(-4)}`,
+    customer_phone: mobileNumber,
+    customer_name: name,
+    customer_email: email
+  },
+  order_meta: {
+    return_url: "https://uwcindia.in/success?order_id={order_id}"
+  }
+};
 
     // ✅ Generate proper signature
     const { signature, timestamp } = generateCashfreeSignature(
