@@ -3,8 +3,7 @@ import axios from "axios";
 import crypto from "crypto";
 import cors from "cors";
 import { v4 as uuidv4 } from "uuid";
-import { createClient } from "@supabase/supabase-supabase-js";
-
+import { createClient } from "@supabase/supabase-js"; // ✅ Correct package name
 const app = express();
 const port = 8000;
 
