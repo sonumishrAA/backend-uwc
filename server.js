@@ -43,7 +43,7 @@ app.post("/create-order", async (req, res) => {
   const orderAmount = Math.round(Number(amount) * 100);
 
 
-    if (isNaN(orderAmount) throw new Error("Invalid amount");
+   if (isNaN(orderAmount)) throw new Error("Invalid amount");
 
     const paymentPayload = {
       order_id: orderId,
