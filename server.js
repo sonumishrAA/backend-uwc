@@ -40,7 +40,8 @@ app.post("/create-order", async (req, res) => {
   try {
     const { email, name, mobileNumber, amount, address, service_type } = req.body;
     const orderId = `ORDER_${uuidv4()}`;
-    const orderAmount = Math.round(Number(amount) * 100;
+  const orderAmount = Math.round(Number(amount) * 100);
+
 
     if (isNaN(orderAmount) throw new Error("Invalid amount");
 
