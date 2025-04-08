@@ -10,17 +10,18 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "dependencies": {
-    "@cashfreepayments/cashfree-js": "^1.0.5",
-    "axios": "^1.8.1",
-    "bcryptjs": "^2.4.3",
-    "cors": "^2.8.5",
-    "crypto": "^1.0.1",
-    "dotenv": "^16.4.7",
-    "express": "^4.21.2",
-    "jsonwebtoken": "^9.0.2",
-    "mongoose": "^8.0.0",
-    "nodemon": "^3.1.9",
-    "uuid": "^10.0.0"
-  }
+ "dependencies": {
+  "@cashfreepayments/cashfree-js": "^1.0.5",
+  "@supabase/supabase-js": "^2.39.8", // Add this line
+  "axios": "^1.8.1",
+  "bcryptjs": "^2.4.3",
+  "cors": "^2.8.5",
+  "crypto": "^1.0.1",
+  "dotenv": "^16.4.7",
+  "express": "^4.21.2",
+  "jsonwebtoken": "^9.0.2",
+  "mongoose": "^8.0.0",
+  "nodemon": "^3.1.9",
+  "uuid": "^10.0.0"
+}
 }
