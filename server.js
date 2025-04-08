@@ -17,14 +17,17 @@ const supabase = createClient(
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InB2dHVoY2Vpamx0ZXp4aHFpYnJ2Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3Mzk0Njk1MzMsImV4cCI6MjA1NTA0NTUzM30.kw49U2pX09mV9AjqqPMbipv2Dv6aSttqCXHhJQlmisY"
 );
 
-// ✅ Cashfree PG Production Keys (NOT Master Keys)
-const CASHFREE_APP_ID = "CF33963763787EA2F26F0FE1AF9E736939";
-const CASHFREE_SECRET_KEY = "cfsk_pg_prod_25a32122a99a0240c0653d9d12f0e985_a44c9fcf"; // PG Key
-const CASHFREE_BASE_URL = "https://api.cashfree.com/pg";
+// Cashfree Configuration
+const CASHFREE_CONFIG = {
+  APP_ID: "CF33963763787EA2F26F0FE1AF9E736939",
+  SECRET_KEY: "cfsk_pg_prod_25a32122a99a0240c0653d9d12f0e985_a44c9fcf",
+  BASE_URL: "https://api.cashfree.com/pg",
+  API_VERSION: "2022-09-01"
+};
 
-// ✅ Verified Signature Generation
+// Signature Generation
 const generateCashfreeSignature = (orderId, amount, secret) => {
-  const timestamp = Math.floor(Date.now() / 1000).toString(); // Unix seconds as string
+  const timestamp = Math.floor(Date.now() / 1000).toString();
   const signatureData = `${orderId}${amount}${timestamp}${secret}`;
   return {
     signature: crypto.createHash('sha256').update(signatureData).digest('hex'),
@@ -32,21 +35,18 @@ const generateCashfreeSignature = (orderId, amount, secret) => {
   };
 };
 
+// Order Creation Endpoint
 app.post("/create-order", async (req, res) => {
   try {
     const { email, name, mobileNumber, amount, address, service_type } = req.body;
     const orderId = `ORDER_${uuidv4()}`;
+    const orderAmount = Math.round(Number(amount) * 100;
 
-    // ✅ Validate Amount Conversion
-    const orderAmount = Math.round(Number(amount) * 100);
-    if (isNaN(orderAmount) || orderAmount < 100) {
-      throw new Error("Invalid amount");
-    }
+    if (isNaN(orderAmount) throw new Error("Invalid amount");
 
-    // Payment Payload
     const paymentPayload = {
       order_id: orderId,
-      order_amount: orderAmount, // In paise
+      order_amount: orderAmount,
       order_currency: "INR",
       customer_details: {
         customer_id: `CUST_${mobileNumber.slice(-4)}`,
@@ -59,43 +59,28 @@ app.post("/create-order", async (req, res) => {
       }
     };
 
-    // Generate Signature
     const { signature, timestamp } = generateCashfreeSignature(
-      paymentPayload.order_id,
-      paymentPayload.order_amount,
-      CASHFREE_SECRET_KEY
+      orderId,
+      orderAmount,
+      CASHFREE_CONFIG.SECRET_KEY
     );
 
-    // ✅ Debug Logs (Remove in production)
-    console.log("Signature Data:", {
-      orderId: paymentPayload.order_id,
-      amount: paymentPayload.order_amount,
-      timestamp,
-      signature
-    });
-
-    // API Headers
     const headers = {
-      "x-client-id": CASHFREE_APP_ID,
-      "x-api-version": "2022-09-01",
+      "x-client-id": CASHFREE_CONFIG.APP_ID,
+      "x-client-secret": CASHFREE_CONFIG.SECRET_KEY, // Added missing secret
+      "x-api-version": CASHFREE_CONFIG.API_VERSION,
       "x-cf-signature": signature,
       "x-cf-timestamp": timestamp,
       "Content-Type": "application/json"
     };
 
-    // Cashfree API Call
     const cashfreeResponse = await axios.post(
-      `${CASHFREE_BASE_URL}/orders`,
+      `${CASHFREE_CONFIG.BASE_URL}/orders`,
       paymentPayload,
       { headers }
     );
 
-    // Validate Response
-    if (!cashfreeResponse.data.payment_link) {
-      throw new Error("Cashfree payment link not generated");
-    }
-
-    // Insert to Supabase
+    // Supabase Insert
     const { error } = await supabase.from("orders").insert([{
       order_id: orderId,
       email,
@@ -105,7 +90,6 @@ app.post("/create-order", async (req, res) => {
       address,
       service_type,
       payment_status: "INITIATED",
-      transaction_id: paymentPayload.order_id,
       created_at: new Date().toISOString()
     }]);
 
@@ -113,34 +97,30 @@ app.post("/create-order", async (req, res) => {
 
     res.json({
       url: cashfreeResponse.data.payment_link,
-      txnId: paymentPayload.order_id
+      txnId: orderId
     });
 
   } catch (error) {
-    console.error("Payment Error:", {
-      message: error.message,
-      response: error.response?.data
-    });
+    console.error("Payment Error:", error.response?.data || error.message);
     res.status(500).json({
       error: error.response?.data?.message || "Payment processing failed",
-      code: "PAYMENT_GATEWAY_ERROR"
+      code: "PAYMENT_ERROR"
     });
   }
 });
 
-// Webhook Endpoint
-app.post("/payment-success", async (req, res) => {
+// Webhook Handler
+app.post("/payment-webhook", async (req, res) => {
   try {
-    const signature = req.headers['x-cf-signature'];
+    const receivedSignature = req.headers['x-cf-signature'];
     const body = JSON.stringify(req.body);
     
-    // Verify Signature
-    const expectedSignature = crypto
+    const generatedSignature = crypto
       .createHash('sha256')
-      .update(body + CASHFREE_SECRET_KEY)
+      .update(body + CASHFREE_CONFIG.SECRET_KEY)
       .digest('hex');
 
-    if (signature !== expectedSignature) {
+    if (receivedSignature !== generatedSignature) {
       return res.status(403).json({ error: "Invalid signature" });
     }
 
@@ -155,7 +135,7 @@ app.post("/payment-success", async (req, res) => {
       .eq("order_id", order_id);
 
     res.status(200).json({ status: "Webhook processed" });
-    
+
   } catch (error) {
     console.error("Webhook Error:", error);
     res.status(400).json({ error: "Webhook processing failed" });
